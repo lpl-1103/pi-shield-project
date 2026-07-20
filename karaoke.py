@@ -21,7 +21,45 @@ import requests
 
 MPV_SOCKET = '/tmp/mpv_karaoke_socket'
 LRCLIB_SEARCH_URL = 'https://lrclib.net/api/search'
-AUDIO_DEVICE = 'alsa/hw:1,0'  # Pi 4 內建耳機孔，不是 WM8960 音效板
+
+
+def _detect_headphone_card(fallback=1):
+    """
+    ALSA 的卡編號在重開機後不保證固定（實測發生過 wm8960soundcard 跟
+    bcm2835 Headphones 互換編號），所以不能寫死卡號，要動態從
+    /proc/asound/cards 找出真正對應「Pi 4 內建耳機孔」(bcm2835 Headphones)
+    的卡號，耳機/喇叭實際接在這裡，不是接在 WM8960 音效板上。
+    """
+    try:
+        with open('/proc/asound/cards', 'r') as f:
+            content = f.read()
+        for line in content.splitlines():
+            m = re.match(r'\s*(\d+)\s*\[(\S+)\s*\]', line)
+            if m and 'Headphones' in line:
+                return int(m.group(1))
+    except OSError:
+        pass
+    return fallback
+
+
+HEADPHONE_CARD = _detect_headphone_card()
+AUDIO_DEVICE = f'alsa/hw:{HEADPHONE_CARD},0'
+DEFAULT_VOLUME_DB = '-1000'  # -10dB，使用者指定的音量偏好
+
+
+def _apply_default_volume():
+    """
+    每次程式啟動都主動設定音量，不依賴 ALSA 系統層的存檔/還原機制——
+    這台機器上 WM8960 的開機腳本 (wm8960-soundcard.service) 每次開機都會
+    覆蓋掉 /var/lib/alsa/asound.state，用 alsactl store 存的音量設定留不住。
+    """
+    try:
+        subprocess.run(
+            ['amixer', '-c', str(HEADPHONE_CARD), 'sset', 'PCM', '--', DEFAULT_VOLUME_DB],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
 
 # ---------- 熱門歌曲清單（隨機連續播放用） ----------
 POPULAR_SONGS = {
@@ -192,6 +230,7 @@ def _player_loop():
 
 
 def start():
+    _apply_default_volume()
     threading.Thread(target=_player_loop, daemon=True).start()
 
 

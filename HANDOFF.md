@@ -230,3 +230,41 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 - **改 `line_control.py`/`karaoke.py` 之後**，重啟方式從 `pkill + nohup` 改成 `sudo systemctl restart line-control.service`（改動 Flask app 不需要動 ngrok，不用重啟 `ngrok-tunnel.service`）。
 - 要看 log 用 `sudo journalctl -u line-control.service -f`（或 `-u ngrok-tunnel.service`），不再是看 `~/line_control.log` 這個檔案了（systemd 會接管 stdout/stderr 到 journal，`~/line_control.log` 這個舊檔案不會再更新）。
 - 要臨時停用開機自動啟動：`sudo systemctl disable line-control.service ngrok-tunnel.service`（設定還在，只是開機不會自動跑，跟樹莓派 3 那邊「刻意先不設」的狀態不同，這裡是要停用才需要動作）。
+
+---
+
+# 專案發布到 GitHub
+
+專案已經公開發布：**https://github.com/lpl-1103/pi-shield-project**
+
+發布前把文件裡明碼寫的密碼／密鑰都清掉了（SSH/sudo 密碼、LINE Channel Secret），`.gitignore` 排除了 `pi3_line_config.json`、Claude Code 工具設定檔（`.claude/`、`.embedder/`）跟一個編譯過的執行檔。README.md 是新增的專案首頁介紹。
+
+**換電腦要接著開發的話**：`git clone https://github.com/lpl-1103/pi-shield-project.git`，改完照平常 `git add / commit / push`，跟在哪台機器上操作完全無關。第一次在新機器上 push 前要重新登入一次 GitHub。
+
+---
+
+# ALSA 音效卡編號不穩定，造成「重開機後沒聲音」的 bug 修復
+
+## 問題
+
+今天重啟服務之後，樹莓派 4 完全沒聲音，`mpv` process 有在跑、API 狀態也顯示正常在播放，但實際上聽不到任何聲音。
+
+## 根本原因
+
+`karaoke.py` 原本把音效輸出裝置寫死成 `AUDIO_DEVICE = 'alsa/hw:1,0'`（在 2026-07-17 那次修好音效問題時，`hw:1,0` 剛好對應到 Pi 4 內建耳機孔 `bcm2835 Headphones`）。但**這台機器的 ALSA 卡編號在每次開機時不保證固定**——`wm8960soundcard` 跟 `bcm2835 Headphones` 誰是 card 0、誰是 card 1 會隨機互換（實測：某次重開機後互換了一次，再重開一次又換回來）。一旦編號跟寫死的 `hw:1,0` 對不上，程式就會忠實地把音樂播到 WM8960 那片沒接喇叭的板子上，`mpv` 完全正常運作、不會報任何錯誤，只是聲音出到了沒人接收的地方。
+
+**這是個很難靠看 log 抓到的 bug**——因為所有東西（process 存活、API 狀態、mpv 沒有錯誤訊息）看起來都完全正常，只有「人耳朵聽不到」這個症狀。以後遇到「日誌都正常但沒聲音」，第一個該懷疑的就是音效卡編號是不是變了，用 `cat /proc/asound/cards` 立刻能確認。
+
+## 修法
+
+1. 新增 `_detect_headphone_card()`：程式啟動時讀取 `/proc/asound/cards`，用**名稱**（找含有 `"Headphones"` 字樣的那一行）動態判斷正確的卡號，不再寫死數字。`AUDIO_DEVICE` 從固定字串改成根據偵測結果組出來。
+2. 順便發現音量設定也有類似的持久化問題：之前用 `amixer` 調過的音量（-10dB），本來想用 `sudo alsactl store` 存起來，但這台機器上 WM8960 的開機腳本（`wm8960-soundcard.service`）**每次開機都會刪除並重建 `/var/lib/alsa/asound.state`**，把 `alsactl store` 存的東西蓋掉。改成不依賴系統層存檔機制，程式自己在 `karaoke.start()` 時主動下 `amixer` 指令設定音量（`_apply_default_volume()`），每次啟動都自己設一次，不管系統存檔機制有沒有把設定留住都無所謂。
+
+## 驗證方式
+
+改完不是只憑推理相信會動，是**真的重開機測試**：重開機後 `/proc/asound/cards` 顯示編號真的又跟之前不一樣了（card 0/1 對調），確認：
+- 程式自動偵測到新的正確卡號
+- 音量在新的正確卡號上自動設定成 -10dB
+- 觸發播放後 `mpv` process 的 `--audio-device` 參數用的是正確的卡號
+
+三項都確認正確後才回報修好。這個修法的重點是「讓程式適應環境，而不是硬記一個當下觀察到的值」——寫死 `hw:1,0` 這件事本身就是上次修 bug 時的疏漏，這次順便把它變成真正健壯的做法。
