@@ -1,0 +1,20 @@
+# Claude Code tooling (not part of the project)
+.claude/
+.embedder/
+
+# Secrets — never commit these
+pi3_line_config.json
+*.pem
+*.key
+
+# OS / editor cruft
+.DS_Store
+__pycache__/
+*.pyc
+
+# Empty/placeholder files
+code,ipynb
+
+# Compiled vendor example binary (not source)
+pi3_basic/examples/blink/pir
+
