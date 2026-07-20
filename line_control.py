@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 import threading
+import time
 
 import requests
 from flask import Flask, abort, jsonify, request
@@ -50,6 +51,8 @@ MENU_TEXT = (
     "\n"
     "點歌系統（詳見操作手冊）：\n"
     "  點歌 <歌名>       = 加入排隊（尾綴0=伴奏版，例如「點歌 小星星0」）\n"
+    "  @任何稱呼 <歌名>   = 跟點歌一樣，更口語（例如「@小樂 稻香」）\n"
+    "  推薦 <歌手>        = 不知道歌名時，推薦該歌手前5首熱門歌，回數字直接點\n"
     "  排隊              = 查看目前播放/排隊列表\n"
     "  切歌 / 刪除 <編號> / 頂歌 <編號>\n"
     "  原聲 / 伴奏        = 切換目前播放的版本\n"
@@ -505,6 +508,9 @@ KARAOKE_HTML = """<!DOCTYPE html>
   }
   .mini-btn:active { transform: scale(.9); }
   .mini-btn.danger { background: rgba(255,59,48,.15); color: var(--danger); }
+  .mini-btn.replay { background: rgba(34,197,94,.15); color: #22c55e; }
+  .history-item { cursor: pointer; }
+  .history-item:active { opacity: .7; }
 </style>
 </head>
 <body>
@@ -559,6 +565,11 @@ KARAOKE_HTML = """<!DOCTYPE html>
   <div class="card">
     <div class="section-title">📃 排隊列表</div>
     <div id="queue-list"><div class="queue-empty">排隊中沒有歌曲</div></div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">🕘 已播歌曲</div>
+    <div id="history-list"><div class="queue-empty">還沒有播放紀錄</div></div>
   </div>
 
 <script>
@@ -647,6 +658,32 @@ function renderQueue(queue) {
   el.innerHTML = html;
 }
 
+function renderHistory(history) {
+  const el = document.getElementById('history-list');
+  if (!history || history.length === 0) {
+    el.innerHTML = '<div class="queue-empty">還沒有播放紀錄</div>';
+    return;
+  }
+  let html = '';
+  history.forEach(function (h) {
+    const modeLabel = h.mode === 'instrumental' ? '伴奏' : '原聲';
+    html += '<div class="queue-item history-item" onclick="replaySong(\\'' + h.url + '\\', \\'' + h.mode + '\\')">' +
+      '<div class="queue-num">🎵</div>' +
+      '<div class="queue-info"><div class="queue-title">' + escapeHtml(h.title) + '</div>' +
+      '<div class="queue-sub">' + modeLabel + ' · ' + escapeHtml(h.requester) + '</div></div>' +
+      '<button class="mini-btn replay" onclick="event.stopPropagation(); replaySong(\\'' + h.url + '\\', \\'' + h.mode + '\\')">🔁</button>' +
+      '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function replaySong(url, mode) {
+  fetch('/api/karaoke/add', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({query: url, mode: mode, requester: '網頁點歌'})
+  }).then(poll);
+}
+
 const RADIO_LABELS = {kpop: 'K-pop', cpop: '中文流行', epop: '英文流行'};
 
 function renderRadio(category) {
@@ -661,6 +698,7 @@ function poll() {
   fetch('/api/karaoke/status').then(function (r) { return r.json(); }).then(function (data) {
     renderNowPlaying(data);
     renderQueue(data.queue);
+    renderHistory(data.history);
     renderRadio(data.radio_category);
     if (data.now_playing) {
       if (currentLyricsTitle !== data.now_playing.title) {
@@ -772,6 +810,18 @@ MANUAL_HTML = """<!DOCTYPE html>
     <code>點歌 小星星0</code>
     <div class="sub">會自動搜尋「小星星 伴奏 instrumental」，找不到伴奏版的話會播原版。</div>
   </div>
+  <div class="card">
+    更口語的方式：直接 <code>@隨便什麼稱呼 歌名</code>，跟「點歌」完全一樣，只是感覺像在叫機器人：<br />
+    <code>@小樂 稻香</code>
+    <div class="sub">@ 後面接的稱呼不會被檢查是不是正確，隨便打都算數，重點是後面那個空白隔開的歌名。</div>
+  </div>
+
+  <h2>不知道歌名？請它推薦</h2>
+  <div class="card">
+    <code>推薦 &lt;歌手或關鍵字&gt;</code>（也可以說「介紹 X」「X的歌」「X有什麼歌」「X推薦」）<br />
+    例如：<code>推薦 周杰倫</code><br />
+    <span class="sub">機器人會列出搜尋到的前 5 首熱門歌曲，回一個數字（1~5）就會直接把那首加入排隊，不用再打一次歌名。這個「回數字」的視窗有效期是 2 分鐘，超過的話數字鍵就會變回原本的燈泡控制指令。</span>
+  </div>
 
   <h2>查看排隊</h2>
   <div class="card">
@@ -806,7 +856,11 @@ MANUAL_HTML = """<!DOCTYPE html>
   <h2>網頁點歌頁面</h2>
   <div class="card">
     <a href="/karaoke">/karaoke</a><br />
-    <span class="sub">現正播放、進度條、動態同步歌詞、點歌輸入框、排隊列表（可以頂歌/刪除）、熱門歌曲隨機播放按鈕都在這一頁，手機 LINE 內建瀏覽器打開就能用，每 1.5 秒自動更新一次。</span>
+    <span class="sub">現正播放、進度條、動態同步歌詞、點歌輸入框、排隊列表（可以頂歌/刪除）、熱門歌曲隨機播放按鈕、已播歌曲紀錄都在這一頁，手機 LINE 內建瀏覽器打開就能用，每 1.5 秒自動更新一次。</span>
+  </div>
+  <div class="card">
+    頁面最下面的「已播歌曲」會列出最近播過的歌，點整列或按 🔁 就能直接重新加入排隊——重播的是當初解析好的確切影片，不會重新搜尋選到不同版本。<br />
+    <span class="sub">另外，「推薦 &lt;歌手&gt;」現在會自動排除已經播過的歌曲（不管是手動點的還是熱門電台播過的都算）。</span>
   </div>
 
   <h2>快速叫出這個頁面</h2>
@@ -891,12 +945,60 @@ def _format_queue_text() -> str:
     return '\n'.join(lines)
 
 
+def _queue_song_from_text(query_text: str, user_id) -> str:
+    """共用邏輯：解析歌名尾綴 0（伴奏版），加入排隊，組回覆文字。"""
+    query = query_text.strip()
+    mode = 'original'
+    if not query.startswith(('http://', 'https://')) and query.endswith('0') and len(query) > 1:
+        query = query[:-1].strip()
+        mode = 'instrumental'
+    requester = get_display_name(user_id)
+    karaoke.add_song(query, requester, mode)
+    mode_label = '伴奏版' if mode == 'instrumental' else '原聲'
+    return f'🎤 已加入點歌佇列（{mode_label}）：{query}\n點歌人：{requester}'
+
+
+# user_id -> {'songs': [{'title':..., 'id':...}, ...], 'ts': float}
+# 用來記住「剛剛推薦過的歌手候選清單」，讓使用者回一個數字就能直接點歌，
+# 120 秒內有效、用過即丟；過期或沒有待選清單時，數字鍵一律照舊是 LED 指令。
+_pending_recommendations: dict = {}
+_RECOMMENDATION_TTL = 120
+
+
+def _extract_recommend_keyword(key: str):
+    """辨識「推薦 X」「介紹 X」「X的歌」「X有什麼歌」「X推薦」幾種自然說法，回傳關鍵字或 None。"""
+    for prefix in ('推薦', '介紹'):
+        if key.startswith(prefix):
+            kw = key[len(prefix):].strip()
+            if kw:
+                return kw
+    for suffix in ('有什麼歌', '的歌', '推薦'):
+        if key.endswith(suffix) and len(key) > len(suffix):
+            kw = key[:-len(suffix)].strip()
+            if kw:
+                return kw
+    return None
+
+
 def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
     key = text.strip()
     lowered = key.lower()
     panel_url = f'{base_url}/panel' if base_url else ''
     karaoke_url = f'{base_url}/karaoke' if base_url else ''
     manual_url = f'{base_url}/manual' if base_url else ''
+
+    # 剛推薦過歌手候選清單、且還在有效期內時，數字 1~5 用來選歌而不是控制燈泡。
+    # 沒有待選清單時完全不影響原本的 LED 數字指令。
+    pending = _pending_recommendations.get(user_id or '_anon')
+    if pending and key in ('1', '2', '3', '4', '5') and time.time() - pending['ts'] < _RECOMMENDATION_TTL:
+        _pending_recommendations.pop(user_id or '_anon', None)
+        idx = int(key) - 1
+        songs = pending['songs']
+        if 0 <= idx < len(songs):
+            song = songs[idx]
+            requester = get_display_name(user_id)
+            karaoke.add_song(f'https://www.youtube.com/watch?v={song["id"]}', requester, 'original')
+            return f'🎤 已加入點歌佇列：{song["title"]}\n點歌人：{requester}'
 
     if '小樂' in key and '點歌' in key:
         if not base_url:
@@ -951,21 +1053,30 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
         query = key[2:].strip()
         if not query:
             return '請在「點歌」後面加上歌名，例如：點歌 小星星（尾綴加0表示伴奏版，例如：點歌 小星星0）'
-        mode = 'original'
-        if not query.startswith(('http://', 'https://')) and query.endswith('0') and len(query) > 1:
-            query = query[:-1].strip()
-            mode = 'instrumental'
-        requester = get_display_name(user_id)
-        karaoke.add_song(query, requester, mode)
-        mode_label = '伴奏版' if mode == 'instrumental' else '原聲'
-        return f'🎤 已加入點歌佇列（{mode_label}）：{query}\n點歌人：{requester}'
+        return _queue_song_from_text(query, user_id)
     if lowered.startswith('play'):
         query = key[len('play'):].strip()
         if not query:
             return 'Usage: play <song name or YouTube URL>'
-        requester = get_display_name(user_id)
-        karaoke.add_song(query, requester, 'original')
-        return f'🎤 已加入點歌佇列：{query}\n點歌人：{requester}'
+        return _queue_song_from_text(query, user_id)
+    if key.startswith('@'):
+        rest = key[1:].strip()
+        parts = rest.split(None, 1)  # 第一個空白前是「叫誰」，不檢查內容，任何稱呼都接受
+        if len(parts) == 2 and parts[1].strip():
+            return _queue_song_from_text(parts[1], user_id)
+        hint = f"\n點歌頁面：{karaoke_url}" if karaoke_url else ''
+        return f'我在的～直接說「@我 歌名」就能點歌，或傳「排隊」看目前清單。{hint}'
+    recommend_keyword = _extract_recommend_keyword(key)
+    if recommend_keyword:
+        songs = karaoke.search_top_songs(recommend_keyword, count=5, exclude_ids=karaoke.get_played_video_ids())
+        if not songs:
+            return f'找不到「{recommend_keyword}」的推薦歌曲，可以試試「點歌 {recommend_keyword} <歌名>」直接點播'
+        _pending_recommendations[user_id or '_anon'] = {'songs': songs, 'ts': time.time()}
+        lines = [f'🔍 「{recommend_keyword}」熱門推薦：']
+        for i, s in enumerate(songs, 1):
+            lines.append(f'{i}. {s["title"]}')
+        lines.append('\n回覆數字（例如 1）就能直接加入排隊')
+        return '\n'.join(lines)
     if lowered in ('排隊', '查詢', 'queue', '歌單'):
         return _format_queue_text()
     if lowered in ('切歌', 'skip'):
@@ -1082,6 +1193,7 @@ def api_karaoke_status():
         # 先用使用者輸入的乾淨歌名搜歌詞，YouTube 標題常常太雜亂（含頻道名稱等），當備援用
         lyrics = karaoke.fetch_lyrics(np['query'], np['title'])
     status['lyrics'] = lyrics
+    status['history'] = karaoke.get_history(limit=20)
     return jsonify(status)
 
 

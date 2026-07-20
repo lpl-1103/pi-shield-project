@@ -115,6 +115,33 @@ _now_playing: Song | None = None
 _mpv_process = None
 _lyrics_cache: dict = {}
 
+_history: list = []  # 已播歌曲，依播放先後順序 append，最新的在最後面
+_HISTORY_MAX = 30
+
+
+def _record_history(song, video_id, url):
+    with _lock:
+        _history.append({
+            'title': song.title,
+            'video_id': video_id,
+            'url': url,
+            'mode': song.mode,
+            'requester': song.requester,
+            'played_at': time.time(),
+        })
+        if len(_history) > _HISTORY_MAX:
+            _history.pop(0)
+
+
+def get_history(limit=20):
+    with _lock:
+        return list(reversed(_history[-limit:]))
+
+
+def get_played_video_ids():
+    with _lock:
+        return {h['video_id'] for h in _history if h.get('video_id')}
+
 
 def _resolve_youtube(query, mode):
     """回傳 (title, watch_url)，解析失敗回傳 (None, None)。"""
@@ -129,13 +156,43 @@ def _resolve_youtube(query, mode):
             ['yt-dlp', '--print', '%(title)s', '--print', '%(id)s', target],
             capture_output=True, text=True, timeout=25,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):
         return None, None
     lines = result.stdout.strip().splitlines()
     if len(lines) < 2:
         return None, None
     title, video_id = lines[0], lines[1]
     return title, f'https://www.youtube.com/watch?v={video_id}'
+
+
+def search_top_songs(keyword, count=5, exclude_ids=None):
+    """
+    給歌手名/關鍵字，回傳最多 count 首搜尋結果 [{'title':..., 'id':...}, ...]，
+    自動排除 exclude_ids 裡的影片（通常是「已經播放過」的清單）。
+    用 --flat-playlist 只列基本資訊，不逐一解析播放格式，回應快很多。
+    這是「YouTube 搜尋排序」不是正式排行榜資料，但對熱門歌手夠準了。
+    """
+    exclude_ids = exclude_ids or set()
+    # 多抓一點候選，扣掉已播過的之後才有機會湊滿 count 首
+    fetch_count = count + len(exclude_ids) + 5
+    target = f'ytsearch{fetch_count}:{keyword} 熱門歌曲'
+    try:
+        result = subprocess.run(
+            ['yt-dlp', '--flat-playlist', '--print', '%(title)s', '--print', '%(id)s', target],
+            capture_output=True, text=True, timeout=25,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    lines = result.stdout.strip().splitlines()
+    songs = []
+    for i in range(0, len(lines) - 1, 2):
+        title, video_id = lines[i], lines[i + 1]
+        if video_id in exclude_ids:
+            continue
+        songs.append({'title': title, 'id': video_id})
+        if len(songs) >= count:
+            break
+    return songs
 
 
 def _mpv_query(prop):
@@ -208,6 +265,8 @@ def _player_loop():
                 _now_playing = None
             continue
         song.title = title
+        video_id = url.rsplit('v=', 1)[-1] if url else None
+        _record_history(song, video_id, url)
 
         if os.path.exists(MPV_SOCKET):
             os.remove(MPV_SOCKET)
