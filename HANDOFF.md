@@ -419,3 +419,47 @@ LINE 使用者口語訊息
 6. `_record_history` 現在也存 `song.query`（原始查詢字串），不是只存解析後的 YouTube 標題——`get_played_queries()` 排重要用。
 
 驗證：本地寫了一份不需要 GPIO/yt-dlp 的單元測試（假造 `_history` 內容、monkeypatch `subprocess.run` 模擬 yt-dlp 輸出），確認：過期紀錄真的會被清掉、電台選歌會避開最近播過的、整個分類都播過一輪後會優雅退回允許重複、推薦結果會正確排除「ID 不同但標題正規化後相同」的重複。部署到樹莓派後用真實 LINE webhook 送「推薦 周杰倫」確認正常回應、沒有噴錯。
+
+---
+
+# 2026-07-21：修點歌人辨識 bug、大螢幕歌詞頁面、語音點歌
+
+使用者一次提了三件事，分開記錄。
+
+## 1. 修 bug：點歌人有時候會被誤判成「匿名」
+
+`get_display_name(user_id)` 原本的邏輯是：查 LINE Get Profile API，不管成功失敗都把結果寫進 `_display_name_cache[user_id]`。問題是「失敗」也會被快取——如果剛好那一次 LINE API 逾時或網路不穩（8 秒逾時不算長），這個使用者就會被永久卡成「匿名」，直到服務重啟為止，之後每次點歌都查不到真名，即使 LINE API 本身早就恢復正常。
+
+改法很單純：**只有成功查到名字才寫入快取**，失敗的話這次先回「匿名」但不快取，下次同一個人點歌會重新試著查一次，不會被一次性的網路問題卡死。
+
+## 2. 大螢幕歌詞頁面（`/display`）
+
+使用者想要接電視/顯示器當 KTV 大螢幕用，但手邊暫時沒有 HDMI 線，所以這次先把頁面做好、部署上線，等有線材再實際測試投影效果。
+
+新增 `DISPLAY_HTML` + `/display` 路由，風格延續 `KARAOKE_HTML` 既有的視覺語言（深色背景、漸層品牌色、旋轉唱片動畫），但版面整個重新設計成「電視觀看距離」的比例：
+- 超大字體同步歌詞（像跑馬燈提詞機，目前行 4.2vw、前後行 2vw，比手機版的字級大非常多）
+- 現正播放的封面（旋轉唱片）+ 歌名 + 點歌人，固定在畫面上方
+- 畫面底部固定顯示「接下來」的排隊清單（最多 4 首）
+- 沒有播放中時顯示「等待點歌中...」的待機畫面，附上怎麼點歌的提示
+- 右上角常駐小字提示「在 LINE 傳『點歌 歌名』」，因為這個頁面本身沒有任何可點擊的互動元件（電視/投影機通常沒有滑鼠鍵盤）
+
+沿用既有的 `/api/karaoke/status` 每 1.5 秒輪詢機制，沒有新增後端 API。LINE 傳「大螢幕」（或「大屏」「投影」「display」「tv」）會回傳這個頁面連結。
+
+驗證：這個 Browser 環境的沙盒會擋掉樹莓派區網 IP 跟 localhost 的存取（需要另外手動批准），所以沒辦法直接截圖看樹莓派上的實際渲染結果，改成把同一份 HTML/CSS/JS 配上假資料發布成 Artifact 預覽（模擬待機/播放中兩種狀態），視覺上跟部署到樹莓派上的是同一份程式碼，邏輯上沒有差異。實際接上電視後如果比例/字級不順眼，微調對應的 vw 數值即可。
+
+## 3. 語音點歌
+
+使用者想要傳語音訊息也能點歌，不用打字。openclaw 內建的語音轉文字全部是雲端 provider（Deepgram、OpenAI、Google 等等），沒有本地選項，所以另外**獨立於 openclaw** 架了一個本機語音轉文字服務：
+
+- **Mac 端新增 `~/.whisper_server/whisper_server.py`**：獨立的小 Flask app（自己的 venv，Python 3.12 + `mlx-whisper` + `flask`），用 `mlx-community/whisper-large-v3-turbo` 模型（~1.6GB，Apple Silicon 上跑得快，中文專有名詞辨識也比小模型準），監聽 port 8765，`POST /transcribe` 收音檔位元組、回傳辨識文字。另外裝了 `ffmpeg`（Homebrew）給 mlx-whisper 解碼音訊用。目前是手動 `nohup ... &` 啟動的，不是 launchd 常駐服務——Mac 重開機或這個 process 被殺掉的話需要手動重開，之後有空可以比照 Bionic/openclaw 那樣設成開機自動啟動。
+- **樹莓派新增 `stt.py`**：跟 `nlu.py` 平行的獨立模組，`transcribe(audio_bytes) -> str | None`，讀 `pi3_line_config.json` 新增的 `stt_base_url`/`stt_enabled`。任何失敗一律回 `None`。
+- **`line_control.py` 的 `/callback`**：原本只處理 `message.type == 'text'`，其他類型（含語音）直接跳過。現在多處理 `'audio'` 類型：`_download_line_audio(message_id)` 用 LINE 的 Content API（`GET https://api-data.line.me/v2/bot/message/{id}/content`，跟 `get_display_name()` 用的是同一種 Bearer token 認證方式）把語音訊息的音檔下載下來，丟給 `stt.transcribe()` 轉文字，轉出來的文字**直接丟回 `handle_command()`**——跟語音辨識完全無關的既有規則、@提及、推薦、NLU fallback 全部原封不動重用，不用另外寫一套。回覆會先顯示「🎤 聽到你說：『...』」再接實際處理結果，讓使用者能發現辨識錯誤（語音辨識不可能 100% 準，尤其是歌名這種專有名詞，這一步是刻意的透明度設計，不是可有可無的細節）。
+
+**驗證時發現的真實案例**：拿 macOS 的 `say` 指令生成一句測試語音「我想聽周杰倫的稻香」轉成 m4a，直接打 Mac 本機的 whisper server 辨識結果是「稻香」完全正確；但同一個音檔透過樹莓派整個網路路徑（Pi 下載音檔的等效測試 → 打 Mac 的服務）再測一次，這次辨識成「道香」——「稻」「道」是完全同音字，這是語音辨識模型本身的合理誤判（尤其 `say` 合成的語音音調比真人說話更平，同音字更難靠語氣分辨），不是程式邏輯的 bug。這正好驗證了「回覆先顯示聽到的內容」這個設計是必要的，不是多餘的。
+
+**沒辦法測到的部分**：`_download_line_audio()` 這個下載音檔的函式，因為需要一個真實的 LINE 語音訊息 message id 才能實際呼叫 LINE 的 Content API，沒辦法用假造的 webhook payload 測試（這點跟文字訊息不一樣，文字訊息整個 payload 都可以自己組)。這段程式碼的認證方式完全比照已經驗證過能正常運作的 `get_display_name()`，風險評估上覺得可以接受，但最終還是需要使用者實際傳一則語音訊息來完整驗證這條路徑。
+
+## 這次沒做但先记录下来的：
+
+- Whisper server 沒有設成開機自動啟動（launchd agent），跟 Bionic 一樣需要手動啟動，Mac 重開機後記得重跑 `~/.whisper_server/venv/bin/python ~/.whisper_server/whisper_server.py`。
+- Whisper server 目前沒有任何身份驗證（純 LAN 內網、不需要密鑰），因為它只是一個「音檔進、文字出」的純函式服務，沒有像 openclaw 那樣可以執行危險操作的疑慮，風險評估上刻意選擇簡化掉這一層。

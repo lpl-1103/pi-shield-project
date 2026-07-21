@@ -23,6 +23,7 @@ from flask import Flask, abort, jsonify, request
 
 import karaoke
 import nlu
+import stt
 from pi3_control import NOTE_KEYS, PAINTER_SONG, Pi3Shield
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pi3_line_config.json')
@@ -59,9 +60,11 @@ MENU_TEXT = (
     "  原聲 / 伴奏        = 切換目前播放的版本\n"
     "  停止              = 停止播放並清空排隊\n"
     "  熱門 kpop/中文/英文 = 隨機連續播放熱門歌曲，直到「暫停熱門」\n"
+    "  大螢幕 = 傳送接電視/顯示器用的大字歌詞頁面連結\n"
     "  小樂小樂，我要點歌 = 傳送點歌頁面連結+操作手冊\n"
     "  以上都比對不到的話，也可以直接用口語講（例如「我想聽周杰倫的稻香」\n"
-    "  「可以跳過這首嗎」），機器人會試著聽懂（需要本機 AI 服務有開）"
+    "  「可以跳過這首嗎」），機器人會試著聽懂（需要本機 AI 服務有開）\n"
+    "  直接傳「語音訊息」也可以點歌，不用打字，機器人會轉成文字再照上面的規則處理"
 )
 
 PANEL_HTML = """<!DOCTYPE html>
@@ -770,6 +773,220 @@ setInterval(poll, 1500);
 </html>
 """
 
+DISPLAY_HTML = """<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>🎤 卡拉OK大螢幕</title>
+<style>
+  :root {
+    --bg-a: #0a0818; --bg-b: #160e2e; --bg-c: #0c1622;
+    --text: #f5f3ff; --sub: #8f89b3;
+    --brand: linear-gradient(135deg, #8b7cf6, #ff6fa0);
+    --brand2: linear-gradient(135deg, #06b6d4, #22c55e);
+    --card: rgba(255,255,255,.05);
+    --card-border: rgba(255,255,255,.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background:
+      radial-gradient(circle at 15% 10%, var(--bg-b) 0%, transparent 45%),
+      radial-gradient(circle at 88% 20%, var(--bg-c) 0%, transparent 40%),
+      var(--bg-a);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  }
+  .stage {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    width: 100vw; height: 100vh; padding: 4vh 6vw; text-align: center;
+  }
+
+  /* ---- idle state ---- */
+  .idle { display: flex; flex-direction: column; align-items: center; gap: 2vh; }
+  .idle .emoji { font-size: 10vw; opacity: .8; }
+  .idle h1 {
+    font-size: 4vw; font-weight: 800;
+    background: var(--brand); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .idle p { font-size: 1.6vw; color: var(--sub); }
+
+  /* ---- now playing header ---- */
+  .np-head { display: flex; align-items: center; gap: 2.2vw; margin-bottom: 3vh; }
+  .vinyl {
+    width: 9vw; height: 9vw; min-width: 70px; min-height: 70px; border-radius: 50%; flex-shrink: 0;
+    background: conic-gradient(from 0deg, #8b7cf6, #ff6fa0, #ffb86f, #8b7cf6);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 60px rgba(139,124,246,.5);
+  }
+  .vinyl::after { content: ''; width: 32%; height: 32%; border-radius: 50%; background: var(--bg-a); }
+  .vinyl.spinning { animation: spin 5s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .np-text { text-align: left; }
+  .np-title {
+    font-size: 3vw; font-weight: 800; line-height: 1.25; max-width: 70vw;
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .np-sub { font-size: 1.3vw; color: var(--sub); margin-top: .8vh; }
+  .pill {
+    display: inline-block; padding: .3vh 1vw; border-radius: 999px;
+    font-size: 1.1vw; font-weight: 700; color: #fff; background: var(--brand);
+    margin-right: 8px;
+  }
+  .pill.alt { background: var(--brand2); }
+
+  /* ---- lyrics ---- */
+  .lyrics { display: flex; flex-direction: column; gap: 2.2vh; width: 100%; max-width: 90vw; }
+  .lyric-line { font-size: 2vw; color: var(--sub); opacity: .45; transition: all .3s; line-height: 1.4; }
+  .lyric-line.current {
+    font-size: 4.2vw; font-weight: 800; opacity: 1; line-height: 1.3;
+    background: var(--brand); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+
+  /* ---- progress ---- */
+  .progress-wrap { width: 60vw; max-width: 900px; margin-top: 4vh; }
+  .progress-track { background: rgba(255,255,255,.1); border-radius: 8px; height: 10px; overflow: hidden; }
+  .progress-bar { background: var(--brand); height: 100%; width: 0%; border-radius: 8px; transition: width .3s linear; }
+
+  /* ---- up next strip ---- */
+  .up-next {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; gap: 1.4vw;
+    padding: 2vh 3vw; background: linear-gradient(to top, rgba(0,0,0,.55), transparent);
+  }
+  .up-next .label {
+    font-size: 1.1vw; font-weight: 800; color: var(--sub); text-transform: uppercase; letter-spacing: .1em;
+    flex-shrink: 0;
+  }
+  .up-next .item {
+    font-size: 1.3vw; font-weight: 600; color: var(--text); opacity: .85;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: var(--card); border: 1px solid var(--card-border);
+    padding: .8vh 1.2vw; border-radius: 999px;
+  }
+
+  /* ---- corner hint ---- */
+  .hint {
+    position: fixed; top: 2.5vh; right: 3vw; text-align: right;
+    font-size: 1vw; color: var(--sub); line-height: 1.6;
+  }
+  .hint b { color: var(--text); }
+</style>
+</head>
+<body>
+  <div class="hint">在 LINE 傳 <b>「點歌 歌名」</b> 就能加入排隊<br />或說口語的也聽得懂，例如「我想聽稻香」</div>
+
+  <div class="stage" id="stage">
+    <div class="idle" id="idle-view">
+      <div class="emoji">🎤</div>
+      <h1>等待點歌中...</h1>
+      <p>在 LINE 傳「點歌 歌名」開始今晚的第一首歌</p>
+    </div>
+
+    <div id="playing-view" style="display:none; width:100%;">
+      <div class="np-head">
+        <div class="vinyl" id="vinyl"></div>
+        <div class="np-text">
+          <div class="np-title" id="np-title"></div>
+          <div class="np-sub" id="np-sub"></div>
+        </div>
+      </div>
+      <div class="lyrics" id="lyrics"></div>
+      <div class="progress-wrap">
+        <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="up-next" id="up-next" style="display:none;">
+    <div class="label">接下來</div>
+  </div>
+
+<script>
+let currentLyrics = null;
+let currentLyricsTitle = null;
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : s;
+  return div.innerHTML;
+}
+
+function renderLyrics(lyrics, timePos) {
+  const el = document.getElementById('lyrics');
+  if (!lyrics || lyrics.length === 0) {
+    el.innerHTML = '<div class="lyric-line current">🎶</div>';
+    return;
+  }
+  let idx = -1;
+  for (let i = 0; i < lyrics.length; i++) {
+    if (lyrics[i].time <= (timePos || 0)) idx = i; else break;
+  }
+  const start = Math.max(0, idx - 1);
+  const end = Math.min(lyrics.length, idx + 3);
+  let html = '';
+  for (let i = start; i < end; i++) {
+    const cls = i === idx ? 'lyric-line current' : 'lyric-line';
+    html += '<div class="' + cls + '">' + escapeHtml(lyrics[i].text) + '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function renderUpNext(queue) {
+  const wrap = document.getElementById('up-next');
+  if (!queue || queue.length === 0) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'flex';
+  let html = '<div class="label">接下來</div>';
+  queue.slice(0, 4).forEach(function (s) {
+    html += '<div class="item">' + escapeHtml(s.title || s.query) + '</div>';
+  });
+  wrap.innerHTML = html;
+}
+
+function poll() {
+  fetch('/api/karaoke/status').then(function (r) { return r.json(); }).then(function (data) {
+    const np = data.now_playing;
+    const idleView = document.getElementById('idle-view');
+    const playingView = document.getElementById('playing-view');
+    if (!np) {
+      idleView.style.display = 'flex';
+      playingView.style.display = 'none';
+      renderUpNext(data.queue);
+      currentLyrics = null;
+      currentLyricsTitle = null;
+      return;
+    }
+    idleView.style.display = 'none';
+    playingView.style.display = 'block';
+    document.getElementById('vinyl').classList.add('spinning');
+    document.getElementById('np-title').textContent = np.title;
+    const modeLabel = np.mode === 'instrumental' ? '伴奏版' : '原聲';
+    const pillClass = np.mode === 'instrumental' ? 'pill alt' : 'pill';
+    document.getElementById('np-sub').innerHTML =
+      '<span class="' + pillClass + '">' + modeLabel + '</span>' + escapeHtml(np.requester) + ' 點播';
+    const pct = data.duration ? Math.min(100, (data.time_pos / data.duration) * 100) : 0;
+    document.getElementById('progress-bar').style.width = pct + '%';
+    if (currentLyricsTitle !== np.title) {
+      currentLyrics = data.lyrics;
+      currentLyricsTitle = np.title;
+    }
+    renderLyrics(currentLyrics, data.time_pos);
+    renderUpNext(data.queue);
+  }).catch(function () {});
+}
+
+poll();
+setInterval(poll, 1500);
+</script>
+</body>
+</html>
+"""
+
 MANUAL_HTML = """<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -866,10 +1083,22 @@ MANUAL_HTML = """<!DOCTYPE html>
     <span class="sub">另外，「推薦 &lt;歌手&gt;」跟「熱門」電台自動選歌，都會自動排除 12 小時內播過的歌曲（同一首歌就算是不同人上傳、影片網址不一樣，也算重複），避免一直繞回同幾首；但直接「點歌」指定歌名的話，就算 12 小時內剛播過也一定會播，不受這個限制。已播紀錄超過 12 小時會自動清除，釋放記憶體，同時代表那些歌又可以被推薦/電台選到了。</span>
   </div>
 
+  <h2>大螢幕模式（接電視/投影機）</h2>
+  <div class="card">
+    <a href="/display">/display</a><br />
+    <span class="sub">專門給電視/顯示器看的大字版面，深色背景、超大字體的同步歌詞（像跑馬燈提詞機），加上現正播放的封面動畫跟接下來排隊的歌曲。用 LINE 傳 <code>大螢幕</code> 可以拿到這個連結，把樹莓派用 HDMI 接電視/顯示器，瀏覽器打開這頁就能當KTV的大螢幕用，讓大家一起看歌詞唱，不用各自盯著手機。</span>
+  </div>
+
   <h2>聽不懂固定格式也沒關係</h2>
   <div class="card">
     以上指令都比對不到的話，機器人會試著用口語理解你的意思，例如「我想聽周杰倫的稻香」「可以跳過這首嗎」「先暫停一下音樂」都聽得懂，不用照著上面的固定格式打。
     <div class="sub">這個功能需要背後的本機 AI 服務有開著才會生效，沒開的話這類口語訊息還是會回「不認識的指令」，不影響上面列出的所有固定指令。</div>
+  </div>
+
+  <h2>用語音點歌</h2>
+  <div class="card">
+    在 LINE 直接錄一段語音訊息傳過去就可以，不用打字，例如直接說「我想聽稻香」。機器人會把語音轉成文字（一樣是用本機的服務轉，不會把你的聲音傳到雲端），回覆會先顯示「聽到你說：『...』」讓你確認有沒有聽錯，接著才是實際的處理結果。
+    <div class="sub">如果聽錯了，直接再傳一次語音或改用打字都可以。這個功能跟上面的口語理解共用背後的本機服務，需要服務有開著才會生效。</div>
   </div>
 
   <h2>快速叫出這個頁面</h2>
@@ -912,6 +1141,34 @@ def line_reply(reply_token: str, text: str) -> None:
         print(f"[line_reply] request failed: {exc}")
 
 
+def _download_line_audio(message_id: str) -> bytes | None:
+    try:
+        resp = requests.get(
+            f'https://api-data.line.me/v2/bot/message/{message_id}/content',
+            headers={'Authorization': f'Bearer {CHANNEL_ACCESS_TOKEN}'},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.content
+    except requests.RequestException:
+        pass
+    return None
+
+
+def _handle_voice_message(message_id: str, base_url: str, user_id) -> str:
+    """語音訊息走的路：下載音檔 -> 本機 Whisper 轉文字 -> 丟回 handle_command()
+    走一般文字指令（含既有規則跟 NLU fallback），跟打字點歌是同一套邏輯，
+    只是多了語音轉文字這一步。回覆會附上聽到的內容，方便使用者發現辨識錯誤。"""
+    audio_bytes = _download_line_audio(message_id)
+    if not audio_bytes:
+        return '語音訊息下載失敗，麻煩再傳一次'
+    text = stt.transcribe(audio_bytes)
+    if not text:
+        return '沒聽清楚你說的話，可以再說一次，或直接打字'
+    action_reply = handle_command(text, base_url=base_url, user_id=user_id)
+    return f'🎤 聽到你說：「{text}」\n\n{action_reply}'
+
+
 _display_name_cache: dict = {}
 
 
@@ -920,7 +1177,10 @@ def get_display_name(user_id):
         return '匿名'
     if user_id in _display_name_cache:
         return _display_name_cache[user_id]
-    name = '匿名'
+    # 只有成功查到名字才寫入快取——之前這裡不管成功失敗都會寫入，
+    # 如果剛好那一次 LINE API 逾時/網路不穩，這個使用者就會被永久卡成「匿名」
+    # 直到服務重啟，之後每次點歌都查不到真名。失敗的話這次先回「匿名」，
+    # 但不快取，下次同一個人再點歌會重新試著查一次。
     try:
         resp = requests.get(
             f'https://api.line.me/v2/bot/profile/{user_id}',
@@ -928,11 +1188,13 @@ def get_display_name(user_id):
             timeout=8,
         )
         if resp.status_code == 200:
-            name = resp.json().get('displayName', '匿名')
+            name = resp.json().get('displayName')
+            if name:
+                _display_name_cache[user_id] = name
+                return name
     except requests.RequestException:
         pass
-    _display_name_cache[user_id] = name
-    return name
+    return '匿名'
 
 
 def _format_queue_text() -> str:
@@ -995,6 +1257,7 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
     panel_url = f'{base_url}/panel' if base_url else ''
     karaoke_url = f'{base_url}/karaoke' if base_url else ''
     manual_url = f'{base_url}/manual' if base_url else ''
+    display_url = f'{base_url}/display' if base_url else ''
 
     # 剛推薦過歌手候選清單、且還在有效期內時，數字 1~5 用來選歌而不是控制燈泡。
     # 沒有待選清單時完全不影響原本的 LED 數字指令。
@@ -1015,6 +1278,8 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
         return f"🎤 歡迎使用點歌系統！\n點歌頁面：{karaoke_url}\n操作手冊：{manual_url}\n\n快速上手：直接傳「點歌 歌名」就能加入排隊囉！"
     if lowered in ('面板', 'panel', '控制台'):
         return f"點這個連結打開圖形控制面板：\n{panel_url}" if panel_url else '面板連結目前無法產生'
+    if lowered in ('大螢幕', '大屏', '投影', 'display', 'tv'):
+        return f"用電視/顯示器打開這個連結（HDMI 接樹莓派）：\n{display_url}\n\n畫面會跟著現正播放自動更新，適合接投影機/電視當大家一起看的歌詞牆。" if display_url else '大螢幕頁面連結目前無法產生'
     if lowered in ('help', 'menu', '?', '說明', '指令'):
         text_out = MENU_TEXT
         if panel_url:
@@ -1177,9 +1442,13 @@ def callback():
         if event_type != 'message':
             continue
         message = event.get('message', {})
-        if message.get('type') != 'text':
+        msg_type = message.get('type')
+        if msg_type == 'text':
+            reply_text = handle_command(message.get('text', ''), base_url=base_url, user_id=user_id)
+        elif msg_type == 'audio':
+            reply_text = _handle_voice_message(message.get('id'), base_url=base_url, user_id=user_id)
+        else:
             continue
-        reply_text = handle_command(message.get('text', ''), base_url=base_url, user_id=user_id)
         if reply_token:
             line_reply(reply_token, reply_text)
 
@@ -1199,6 +1468,11 @@ def panel():
 @app.route('/karaoke', methods=['GET'])
 def karaoke_page():
     return KARAOKE_HTML
+
+
+@app.route('/display', methods=['GET'])
+def display_page():
+    return DISPLAY_HTML
 
 
 @app.route('/manual', methods=['GET'])
