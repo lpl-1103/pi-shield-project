@@ -22,6 +22,7 @@ import requests
 from flask import Flask, abort, jsonify, request
 
 import karaoke
+import nlu
 from pi3_control import NOTE_KEYS, PAINTER_SONG, Pi3Shield
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pi3_line_config.json')
@@ -58,7 +59,9 @@ MENU_TEXT = (
     "  原聲 / 伴奏        = 切換目前播放的版本\n"
     "  停止              = 停止播放並清空排隊\n"
     "  熱門 kpop/中文/英文 = 隨機連續播放熱門歌曲，直到「暫停熱門」\n"
-    "  小樂小樂，我要點歌 = 傳送點歌頁面連結+操作手冊"
+    "  小樂小樂，我要點歌 = 傳送點歌頁面連結+操作手冊\n"
+    "  以上都比對不到的話，也可以直接用口語講（例如「我想聽周杰倫的稻香」\n"
+    "  「可以跳過這首嗎」），機器人會試著聽懂（需要本機 AI 服務有開）"
 )
 
 PANEL_HTML = """<!DOCTYPE html>
@@ -860,7 +863,13 @@ MANUAL_HTML = """<!DOCTYPE html>
   </div>
   <div class="card">
     頁面最下面的「已播歌曲」會列出最近播過的歌，點整列或按 🔁 就能直接重新加入排隊——重播的是當初解析好的確切影片，不會重新搜尋選到不同版本。<br />
-    <span class="sub">另外，「推薦 &lt;歌手&gt;」現在會自動排除已經播過的歌曲（不管是手動點的還是熱門電台播過的都算）。</span>
+    <span class="sub">另外，「推薦 &lt;歌手&gt;」跟「熱門」電台自動選歌，都會自動排除 12 小時內播過的歌曲（同一首歌就算是不同人上傳、影片網址不一樣，也算重複），避免一直繞回同幾首；但直接「點歌」指定歌名的話，就算 12 小時內剛播過也一定會播，不受這個限制。已播紀錄超過 12 小時會自動清除，釋放記憶體，同時代表那些歌又可以被推薦/電台選到了。</span>
+  </div>
+
+  <h2>聽不懂固定格式也沒關係</h2>
+  <div class="card">
+    以上指令都比對不到的話，機器人會試著用口語理解你的意思，例如「我想聽周杰倫的稻香」「可以跳過這首嗎」「先暫停一下音樂」都聽得懂，不用照著上面的固定格式打。
+    <div class="sub">這個功能需要背後的本機 AI 服務有開著才會生效，沒開的話這類口語訊息還是會回「不認識的指令」，不影響上面列出的所有固定指令。</div>
   </div>
 
   <h2>快速叫出這個頁面</h2>
@@ -1068,7 +1077,11 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
         return f'我在的～直接說「@我 歌名」就能點歌，或傳「排隊」看目前清單。{hint}'
     recommend_keyword = _extract_recommend_keyword(key)
     if recommend_keyword:
-        songs = karaoke.search_top_songs(recommend_keyword, count=5, exclude_ids=karaoke.get_played_video_ids())
+        songs = karaoke.search_top_songs(
+            recommend_keyword, count=5,
+            exclude_ids=karaoke.get_played_video_ids(),
+            exclude_title_keys=karaoke.get_played_title_keys(),
+        )
         if not songs:
             return f'找不到「{recommend_keyword}」的推薦歌曲，可以試試「點歌 {recommend_keyword} <歌名>」直接點播'
         _pending_recommendations[user_id or '_anon'] = {'songs': songs, 'ts': time.time()}
@@ -1129,6 +1142,15 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
     if lowered in ('暫停熱門', '停止熱門', 'stop radio'):
         karaoke.stop_radio()
         return '⏸ 已暫停熱門播放'
+
+    # ---------- 自然語言翻譯（最後手段，比對不到任何既有規則才會用到） ----------
+    # translate() 只會回傳既有指令格式的文字（或 None），所以直接遞迴丟回
+    # handle_command() 讓前面所有規則重新處理一次，不用另外寫一套分派邏輯；
+    # 翻譯結果如果還是比對不到任何規則，遞迴那次會直接落到下面的「不認識的指令」，
+    # 不會再呼叫一次翻譯，天然不會無限迴圈。
+    translated = nlu.translate(key)
+    if translated:
+        return handle_command(translated, base_url=base_url, user_id=user_id)
     return f'不認識的指令: {text}\n輸入 help 查看指令列表'
 
 

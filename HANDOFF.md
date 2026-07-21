@@ -324,3 +324,98 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 - 本地：手動塞 `_record_history()` 資料，確認 `get_history()` 排序正確（新的在前）、`/api/karaoke/status` 的 `history` 欄位正確帶出、透過 `/api/karaoke/add` 重播歷史紀錄裡的網址能正確加入排隊。
 - 網頁視覺：本地起了個假的 Flask app 匯出 `KARAOKE_HTML`，在瀏覽器裡塞假資料確認「已播歌曲」卡片排版、深色模式、點擊/按鈕互動都正常，主控台沒有 JS 錯誤。
 - 真實部署到樹莓派 4 端對端測試時，意外發現一個很好的驗證機會：測試當下使用者自己在手機 LINE 上開著 K-pop 熱門電台在真實播放，已播清單即時、正確地記錄了 BTS、TWICE、aespa 等實際播出的歌曲——用真實的、非我觸發的使用流量驗證了歷史紀錄功能，比自己寫測試資料更有說服力。過程中沒有中斷使用者正在聽的音樂。
+
+---
+
+# 2026-07-20：LINE 點歌機器人接上 openclaw + Bionic 本地模型，做自然語言翻譯
+
+## 背景：openclaw 調查的來龍去脈
+
+使用者本機 Mac 上另外裝了一套叫 **openclaw** 的工具（`github.com/openclaw/openclaw`，npm 套件，「多管道 AI Gateway」，本機跑在 port 18789），還有 **Bionic**（LM Studio 的改名版，本機模型下載/推論工具，CLI 在 `~/.lmstudio/bin/lms`）。使用者一開始問的是「怎麼把 openclaw 裡『小龍蝦』的模型換成本地的」，調查後發現：
+
+- openclaw 裡目前只有一個預設 agent（`main`），並沒有叫「小龍蝦」的 agent——`~/.openclaw/workspace/IDENTITY.md` 還是空模板，代表使用者原本就打算幫某個 agent 取這個名字，但沒做完。
+- **`~/.openclaw/openclaw.json` 裡的 `channels.line` 設定，跟這個樹莓派專案用的是同一個 LINE 官方帳號**（channel secret 完全一樣）。兩邊沒有真的衝突，因為 LINE 後台的 Webhook 網址目前指向樹莓派的 ngrok，openclaw 那邊的 LINE plugin 雖然 `enabled: true` 但沒有實際收到任何流量——**這只是一個潛在風險點，要記住：如果以後不小心把 LINE 後台的 Webhook 網址改指向 openclaw，兩套系統就會同時收到訊息、行為衝突**。
+
+問清楚之後，使用者真正要的不是「兩個機器人」，而是：**讓現有這個樹莓派 LINE 點歌機器人聽得懂口語**（不是只認「點歌」「推薦」這些固定前綴），並且明確要求翻譯要透過 **openclaw 接上 Bionic 的本地模型**來做（不要走 Mac 上也有裝的 Ollama）。
+
+## 最終架構
+
+```
+LINE 使用者口語訊息
+  → 樹莓派 line_control.py 的 handle_command() 比對所有既有規則，都比對不到
+  → 呼叫新增的 nlu.py 的 translate(text)
+  → HTTP POST 到 Mac 的 openclaw gateway（http://<mac>:18789/v1/chat/completions，
+     model="openclaw/karaoke-nlu"）
+  → openclaw 把請求轉給新建立的 karaoke-nlu 這個 agent（模型指到 Bionic 本地跑的 qwen3-8b）
+  → 模型把口語翻成機器人指令格式的一行文字（例如「點歌 稻香」），或回「無法辨識」
+  → 樹莓派拿到這行文字，直接遞迴丟回 handle_command()，重用全部既有規則去執行，
+     不用另外寫一套 action dispatch
+  → 還是比對不到的話，就跟改動前完全一樣，回「不認識的指令」
+```
+
+**為什麼是「Pi 呼叫 openclaw、openclaw 再呼叫 Bionic」這個兩層架構，而不是 Pi 直接打 Bionic**：使用者明確要求要用 openclaw 做這個翻譯層（不只是把 Bionic 當一個普通的模型 API 用），這樣以後如果要換模型/加其他自然語言功能，都在 openclaw 這一層調整就好，樹莓派端的程式碼不用再動。
+
+## Mac 端設定變更（不在這個 git repo 裡，記在這裡避免以後忘記）
+
+用 `openclaw config patch`（不是手動改 JSON，這個指令會先跑 schema validation，比較不會手滑改壞設定）對 `~/.openclaw/openclaw.json` 做了這些變更：
+
+1. **新增 `models.providers.lmstudio`**：指向 `http://localhost:1234/v1`（Bionic 本機伺服器，只需要綁 localhost，因為呼叫它的 openclaw 就跑在同一台機器上，不用讓它對外）。
+2. **新增 `agents.list`**（原本這個 key 不存在，只有隱含的預設 agent）：
+   - 明確列出 `{id: "main", default: true}`，不設任何 override，讓它繼續 100% 沿用原本的 `agents.defaults`（還是用 ollama/llama3.2:3b，完全不受影響）。
+   - 新增 `karaoke-nlu`（顯示名稱設成「小龍蝦」——算是把使用者最一開始想做的事情做掉了）：`model: "lmstudio/qwen/qwen3-8b"`、`tools: {profile: "minimal", deny: ["session_status"]}`（見下面安全考量）、`contextInjection: "never"`（不要注入 main 的 AGENTS.md/SOUL.md，system prompt 完全自己控制，避免污染小模型的輸出格式）。
+3. **`gateway.bind` 從 `"loopback"` 改成 `"lan"`**：讓同區網的樹莓派連得到 18789 port。
+4. **開啟 `gateway.http.endpoints.chatCompletions.enabled`**：這個 OpenAI 相容端點預設是關的。
+
+⚠️ **安全考量**（不是隱藏起來的細節，有跟使用者講清楚才做）：`gateway.auth.mode: "token"` 這個模式下，`/v1/chat/completions` 端點文件明講「把這個當成完整的 operator 權限」——樹莓派 `pi3_line_config.json` 裡存的這組 `nlu_token`，理論上可以拿去打 `main`（有完整 coding 工具權限，含檔案讀寫/執行指令），不是只能用在翻譯這個用途上。緩解做法：`karaoke-nlu` 這個 agent 本身設了 `tools.profile: "minimal"` 加 `deny: ["session_status"]`（等於零工具），所以就算被打，這個 agent 本身做不了任何危險的事；但 token 外洩的風險等級要跟 LINE channel secret 一樣看待。
+
+## 樹莓派端新增/修改
+
+- **新增 `nlu.py`**：只匯出一個 `translate(text) -> str | None`，讀 `pi3_line_config.json` 新增的 `nlu_base_url`/`nlu_token`/`nlu_enabled` 三個欄位。任何失敗（連不到、逾時 8 秒、格式不對、模型回「無法辨識」）一律回 `None`。
+- **`line_control.py`**：`handle_command()` 最尾端、原本的「不認識的指令」catch-all 之前，插入 NLU fallback——`translated = nlu.translate(key)`，有翻譯結果就**遞迴呼叫 `handle_command(translated, ...)`**，讓翻譯出來的文字重新走一次前面所有既有規則。這個設計刻意不用 JSON 結構化輸出（本來想過，但因為請求是走 openclaw 的完整 agent run 而不是直接打 model API，中間會經過 agent 的一般對話處理流程，不保證每次都遵守 JSON schema），改成「輸出一行既有指令格式的純文字」更穩，而且完全不用另外寫 dispatch。
+- `pi3_line_config.json` 新增 `nlu_base_url`（`http://lpldeMac-mini-2.local:18789`，用 Mac 的 mDNS 名稱不用寫死 IP，比較不怕路由器重新分配 DHCP）、`nlu_token`、`nlu_enabled: true`。
+
+## 本地模型選擇：中間繞了一圈
+
+一開始用 Bionic 已經下載好的 `google/gemma-4-e4b`（4B）測試翻譯品質，結果很不穩（約五到七成準確率，同一句話重跑還會給不同答案，甚至出現過幻覺輸出內部工具路徑 `>MEDIA:file:///__openclaw__/canvas/documents/kpop.mp3` 這種完全編造的東西）。跟使用者確認後，改用 `lms get qwen/qwen3-8b --mlx` 下載了一個更大的模型（4.62GB，MLX 4bit），品質明顯提升到七成左右正確、其餘三成安全地落到「不認識的指令」（不會做錯事，只是沒聽懂）。
+
+這裡有兩個值得記住的教訓：
+1. **透過 openclaw 的 agent run 呼叫模型，跟直接打模型的原生 API 不一樣**——即使把 `tools.profile` 設成最嚴格的 `minimal` 甚至 `deny` 掉僅剩的工具，小模型還是會不時「動作幻覺」（輸出看起來像工具呼叫或內部路徑的東西），這是 agent 執行框架本身的行為模式，不是單純調 prompt 或關工具就能完全根除的。
+2. **這個功能設計本身有容錯能力，所以品質沒到 100% 也還能上線**：`nlu.py` 翻譯失敗或翻出無法辨識的格式，一律回 `None`，`handle_command()` 會直接落到「不認識的指令」，不會誤觸發任何動作（尤其不會碰到 LED/蜂鳴器/繼電器——system prompt 明確禁止輸出這類指令，且就算模型亂翻，`handle_command()` 裡硬體相關的規則檢查在最前面，NLU 只是最後一道 fallback，兩層保護）。
+
+如果之後想繼續提升翻譯品質，方向是：換更大的模型（qwen3-8b 已經是這台 Mac mini M4 16GB 記憶體撐得起的合理上限，再大可能會擠壓其他本機程式的記憶體）、或是研究 openclaw 有沒有「不經過完整 agent run、直接打 provider 原生 API」的呼叫方式（如果有的話應該會比透過 agent run 穩定很多）。
+
+## 驗證方式（都在真實樹莓派 4 上跑過，不是紙上談兵）
+
+- Mac 端：`lms server start --port 1234` 後 `lms ps` 確認模型有載入，`openclaw config patch --dry-run` 先驗證過設定沒問題才真的套用，`openclaw gateway restart` 後本機 `curl localhost:18789/v1/models` 確認 `openclaw/karaoke-nlu` 有出現在清單。
+- 從樹莓派 SSH 出去 `curl http://lpldeMac-mini-2.local:18789/v1/models` 確認區網連得到（mDNS 名稱能正確解析）。
+- 組簽章正確的假 LINE webhook payload 直接打樹莓派本機 IP 的 `/callback`（不用特地繞去 ngrok），透過 `/api/karaoke/status` 確認：
+  - 既有規則（`1`＝LED、`點歌 小星星`、`@小樂 稻香`、`推薦 周杰倫` 後回`1`選歌）行為跟改動前完全一樣。
+  - 口語訊息（「我想聽五月天的溫柔」「可以跳過這首嗎」）能正確加入排隊/切歌。
+  - 完全無關的訊息（「今天天氣如何」）不會誤加歌曲，安全地什麼都不做。
+  - 手動把 Mac 上的 openclaw gateway 停掉，模擬離線，口語訊息在 8 秒逾時內安全回退成「不認識的指令」，不會卡住或讓 Flask process 掛掉。
+- 測試完把樹莓派上的播放佇列用「停止」指令清空，沒有留下測試垃圾在正式佇列裡。
+
+## 順手修的一個 bug：播放「成功」但沒聲音
+
+上面這些都測完之後，使用者實際點歌回報「網頁顯示點播成功、已經在播放階段，但完全沒聲音，然後就直接結束了」。查的時候發現一個程式碼層面的盲點：`_record_history()` 是在 `_resolve_youtube()` 解析成功「之後」、`mpv` 真正啟動「之前」就呼叫的，所以「有出現在已播歌曲清單、網頁顯示正在播放」**不代表 mpv 真的有成功播出聲音**。而且 `_player_loop()` 呼叫 mpv 時用的是 `--really-quiet` + `stdout=DEVNULL, stderr=DEVNULL`，就算 mpv 真的播放失敗，錯誤訊息也是直接丟掉，完全查不到原因。
+
+改成 `--quiet`（只關掉逐秒進度列，警告/錯誤還是會印）+ 把 stdout/stderr 導到 `/tmp/mpv_karaoke.log`（每首歌開始播放時用 `'w'` 模式重開，所以檔案內容永遠是「最近一首歌」的 mpv 輸出，不會無限長大）。修完後重新點播同一支影片重現測試，這次透過 `_mpv_query('time-pos')` 確認 mpv 真的有在推進播放進度（`time_pos` 從 0 開始正常增加），log 檔案也乾淨沒有警告，判斷是暫時性問題（沒有重現到真正的播放失敗）。
+
+這次沒能重現原始的無聲問題，所以沒辦法 100% 確定根本原因，但至少下次再發生的話，`/tmp/mpv_karaoke.log` 會留下 mpv 自己的錯誤訊息，不用再靠猜的。
+
+## 已播歌曲/推薦重複的問題：改成「同一首歌」比對 + 12 小時過期
+
+使用者接著回報兩個相關的問題：(1) 推薦歌曲沒多久就會重複，(2) 已播歌曲清單想要每 12 小時清一次釋放記憶體。查了一下發現這兩個問題其實是同一個根因：
+
+- **舊的排重是用 YouTube 影片 ID 精確比對**（`get_played_video_ids()`），但同一首歌常常有好幾個不同影片 ID（官方版、合輯裡收錄的、不同頻道轉載的），搜尋結果排序一變就可能選到「ID 不同但其實是同一首歌」的版本，ID 比對完全抓不到，使用者感覺就是「推薦一直重複」。
+- **舊的已播歷史是用「最多 30 筆」的固定筆數上限**（`_HISTORY_MAX = 30`），熱門電台開著跑的話很快就會塞滿 30 筆，舊紀錄被擠掉，等於「忘記」自己剛播過那首歌，推薦/電台就會選到看似很久沒播、其實幾分鐘前才播過的歌。
+
+**改法**：
+1. **`_normalize_title()`**：把 YouTube 標題正規化成一個比對用的 key——先拿掉「Official Music Video」「高清」這類宣傳雜訊詞跟括號符號（但保留括號裡的文字，很多標題把歌名放在括號裡，例如「周杰倫【稻香】」），有中文字的話優先取「純中文字元」當 key（比整串比對穩，不受前後的英文/羅馬拼音/頻道名影響），沒有中文字（英美韓文歌名）才退回用整串英數字比對。實測「周杰倫 Jay Chou【稻香 Rice Field】-Official Music Video」跟「周杰倫 - 稻香 (Rice Field) Official Audio」兩個標題會正規化成同一個 key。
+2. **已播歷史從「固定 30 筆」改成「12 小時過期」**（`_HISTORY_TTL = 12 * 3600`），`_HISTORY_MAX` 改成 500 純粹當安全上限（正常情況下靠 TTL 就會控制在很小的數字）。`_prune_expired_history()` 在每次寫入新紀錄、以及每個查詢函式（`get_history`/`get_played_video_ids`/`get_played_queries`/`get_played_title_keys`）裡都會先跑一次，把最舊的、超過 12 小時的紀錄丟掉——因為 `_history` 是照時間遞增 append 的，只要從最前面丟到第一筆沒過期的就能停，不用整份掃。
+3. **`search_top_songs()`** 新增 `exclude_title_keys` 參數，除了原本的 ID 排除，現在也用 `_normalize_title()` 排除「同一首歌不同版本」；同一批搜尋結果內部也順便排重（避免同一次推薦裡官方版跟合輯版都出現）。
+4. **`_pick_radio_song()`** 改用 `get_played_queries()`（12 小時內播過的原始查詢字串，例如熱門清單裡的「周杰倫 稻香」）取代原本「只排除最近 5 首」的 `_radio_recent` 機制——排重窗口從「5 首」變成「12 小時」，明顯更長。因為每個分類目前只有 12 首，如果 12 小時內整個分類都播過一輪，會自動退回允許重複（清單本來就小，這是必然的，不是 bug）。
+5. **`點歌 <歌名>` 手動點播完全不受影響**：`add_song()` 本來就不會呼叫任何排重邏輯，所以「除非點播，不然不要重複播放」這條規則是自然成立的——排重只發生在「推薦」候選過濾跟「熱門電台」自動選歌這兩個地方，使用者自己指定歌名一定會播。
+6. `_record_history` 現在也存 `song.query`（原始查詢字串），不是只存解析後的 YouTube 標題——`get_played_queries()` 排重要用。
+
+驗證：本地寫了一份不需要 GPIO/yt-dlp 的單元測試（假造 `_history` 內容、monkeypatch `subprocess.run` 模擬 yt-dlp 輸出），確認：過期紀錄真的會被清掉、電台選歌會避開最近播過的、整個分類都播過一輪後會優雅退回允許重複、推薦結果會正確排除「ID 不同但標題正規化後相同」的重複。部署到樹莓派後用真實 LINE webhook 送「推薦 周杰倫」確認正常回應、沒有噴錯。
