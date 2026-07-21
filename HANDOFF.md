@@ -461,5 +461,33 @@ LINE 使用者口語訊息
 
 ## 這次沒做但先记录下来的：
 
-- Whisper server 沒有設成開機自動啟動（launchd agent），跟 Bionic 一樣需要手動啟動，Mac 重開機後記得重跑 `~/.whisper_server/venv/bin/python ~/.whisper_server/whisper_server.py`。
 - Whisper server 目前沒有任何身份驗證（純 LAN 內網、不需要密鑰），因為它只是一個「音檔進、文字出」的純函式服務，沒有像 openclaw 那樣可以執行危險操作的疑慮，風險評估上刻意選擇簡化掉這一層。
+
+---
+
+# 2026-07-21（續）：Mac 服務開機自動啟動 + 樹莓派大螢幕 kiosk 模式
+
+上面提到「Whisper server 需要手動啟動」寫完沒多久，使用者就回報兩件事：(1) 樹莓派裝的是無圖形介面的版本（Raspberry Pi OS **Lite**），接 HDMI 也只會看到文字終端機，`/display` 頁面根本沒有瀏覽器可以顯示；(2) 擔心 Mac 上這些服務（Bionic 伺服器、Whisper server）忘記手動啟動。兩個都處理了。
+
+## Mac 端：Bionic + Whisper server 改成開機自動啟動
+
+用 `launchd`（macOS 原生機制，openclaw 自己的 gateway 本來就是這樣裝的，見上面章節的 `ai.openclaw.gateway.plist`），裝了兩個新的 LaunchAgent：
+
+1. **`~/Library/LaunchAgents/com.lpl.bionic-server-start.plist`**：登入時執行一次 `lms server start --port 1234`。這裡有個關鍵發現：`lms server start` 本身執行很快就結束（不到 1 秒），不是常駐 process——它是在跟 Bionic 背景服務「喊話」說「該開 API 伺服器了」。實測**把 Bionic.app 整個關掉**之後執行 `lms server start`，還是印出「Waking up LM Studio service...」然後成功，背後自動啟動了一個 `Bionic --run-as-service` 的無 GUI 精簡模式（不是完整開一個視窗），代表這個 LaunchAgent 不需要額外設「開機自動打開 Bionic.app 本體」。所以這個 plist 只有 `RunAtLoad`，沒有設 `KeepAlive`（因為它本來就该很快跑完退出，設 KeepAlive 反而會被 launchd 誤判成「一直在 crash」而狂重啟）。
+2. **`~/Library/LaunchAgents/com.lpl.whisper-server.plist`**：這個才是真正常駐的 process（`whisper_server.py` 本身），設 `RunAtLoad` + `KeepAlive`（跟 openclaw 的 gateway 一樣的設定，crash 了會自動重開）。
+
+兩個都用 `launchctl load` 載入並實測過重新啟動有效（先手動關掉舊的手動啟動的 process，改成完全交給 launchd 管）。之後 Mac 重開機、或這兩個 process 意外被殺掉，都會自動再起來，不用再手動記得啟動。
+
+## 樹莓派端：`/display` 大螢幕 kiosk 模式
+
+樹莓派裝的是 Raspberry Pi OS **Lite**（一開始整個專案就是刻意選 headless 版本方便 SSH 遠端操作），完全沒有桌面環境，所以就算接了 HDMI，畫面只會停在文字終端機，看不到任何網頁。要讓 `/display` 頁面真的能投影出來，得裝一套最小可用的圖形環境：
+
+1. **裝套件**：`xserver-xorg`（X 伺服器本體）、`xinit`（提供 `startx`）、`x11-xserver-utils`（`xset` 這些工具，用來關掉螢幕保護程式/DPMS 省電模式，不然電視放著放著會自動黑屏）、`chromium`（瀏覽器）、`unclutter`（閒置時自動隱藏滑鼠游標）。這台樹莓派的系統碟還有 23GB 空間，裝這些綽綽有餘。
+   - 過程中有個小插曲：第一次下指令因為 expect 腳本的密碼提示比對邏輯沒處理好，SSH session 提前斷線，但背景的 `apt-get install` 其實已經在樹莓派上繼續跑（沒有真的中斷），第二次重下指令時撞到 dpkg lock 才發現——確認過那個殘留的 process 真的還在正常安裝中（不是卡死），所以就等它跑完，沒有手動殺掉重來。
+2. **開機自動登入到文字終端機**：`sudo raspi-config nonint do_boot_behaviour B2`（等同 `raspi-config` 圖形選單裡的「Console Autologin」），設定 `lpl1103` 這個帳號開機後自動登入 tty1，不用再手動輸入帳密。
+   - ⚠️ 這代表**有實體接觸這台樹莓派的人不用密碼就能拿到一個已登入的終端機**（跟現有「LINE 上任何加好友的人都能操作機器人」是類似等級的信任假設，樹莓派本來就放在家裡，跟這個專案一路的風險接受度一致，這裡明講出來讓使用者知情，不是自己偷偷決定）。
+3. **`~/.profile` 加一段自動判斷**：只有滿足「沒有 `$DISPLAY`（代表還沒進圖形模式）」且「`tty` 是 `/dev/tty1`（代表是實體螢幕登入，不是 SSH 進來的）」才會執行 `startx`——這樣以後 SSH 連進去做維護完全不受影響，只有接電視那個實體登入才會觸發開瀏覽器。
+4. **`~/.xinitrc`**：關掉螢幕保護程式/DPMS、啟動 `unclutter`、**等 `line-control.service` 的網頁伺服器真的啟動**（用 `curl` 輪詢 `/display` 最多 30 秒，因為開機時 X 通常比 Flask app 先準備好，太早開瀏覽器會卡在連線失敗的畫面）、最後用 `chromium --kiosk --incognito ...` 全螢幕開啟 `http://localhost:8000/display`（無邊框、無工具列、無痕模式不留快取/紀錄）。
+5. 確認過 `/etc/X11/Xwrapper.config` 的 `allowed_users=console` 設定跟這套「console 自動登入再跑 startx」的架構是相容的，不需要額外調整權限（不用改成風險較高的 `allowed_users=anybody`）。
+
+**沒辦法驗證的部分**：這一整套「開機 → 自動登入 → 自動開瀏覽器全螢幕」的流程，需要實際重開機 + 有一台螢幕接在樹莓派上才能親眼確認畫面真的有跑起來——我只能透過 SSH 確認每個檔案/設定都正確就位（套件裝好了、autologin 設定檔存在、`.profile`/`.xinitrc` 內容跟語法都對、`Xwrapper.config` 權限模型相容），但沒辦法遠端看到實際的視覺輸出。使用者拿到 HDMI 線接上電視、重開機一次之後，才是真正的最終驗證。如果畫面沒有如預期出現，`~/.xinitrc` 裡的每一步都可以先手動在樹莓派主控台上一行一行執行来排查是哪個環節卡住。
