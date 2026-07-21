@@ -424,6 +424,11 @@ def get_status():
 
 
 _LRC_LINE = re.compile(r'\[(\d+):(\d+(?:\.\d+)?)\](.*)')
+# 有些 lrclib 的同步歌詞是「逐字歌詞」格式，行內每個字前面還會插一個
+# <mm:ss.xxx> 時間標記（給逐字高亮用），例如 <00:00.000>青<00:00.366>花...
+# 不是每首歌都有這種格式，但只要有，之前完全沒處理，這些標記就會被當成
+# 歌詞文字整段顯示出來。這裡把行內的這種標記濾掉，只留下真正的歌詞文字。
+_LRC_INLINE_TAG = re.compile(r'<\d+:\d+(?:\.\d+)?>')
 
 
 def _parse_lrc(lrc_text):
@@ -434,7 +439,7 @@ def _parse_lrc(lrc_text):
             continue
         minutes, seconds, text = m.groups()
         t = int(minutes) * 60 + float(seconds)
-        text = text.strip()
+        text = _LRC_INLINE_TAG.sub('', text).strip()
         if text:
             lines.append({'time': t, 'text': text})
     lines.sort(key=lambda x: x['time'])
