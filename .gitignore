@@ -4,6 +4,7 @@
 
 # Secrets — never commit these
 pi3_line_config.json
+projects/pi3-karaoke/**/pi3_line_config.json
 *.pem
 *.key
 
@@ -16,5 +17,5 @@ __pycache__/
 code,ipynb
 
 # Compiled vendor example binary (not source)
-pi3_basic/examples/blink/pir
+projects/pi3-karaoke/pi3_basic/examples/blink/pir
 
