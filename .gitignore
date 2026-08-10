@@ -19,3 +19,7 @@ code,ipynb
 # Compiled vendor example binary (not source)
 projects/pi3-karaoke/pi3_basic/examples/blink/pir
 
+
+# 驗貨站有自己的 git repo，不要被外層 repo 當成 gitlink 追蹤
+# （加進來的話 clone 外層只會拿到一個空目錄）
+projects/am62a-inspection-station/
