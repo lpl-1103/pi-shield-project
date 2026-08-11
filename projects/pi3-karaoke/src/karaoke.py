@@ -295,6 +295,46 @@ def _mpv_query(prop):
     return None
 
 
+def _mpv_command(*args):
+    """對 mpv 下指令（不是查詢屬性）。成功回傳 True。"""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1)
+            sock.connect(MPV_SOCKET)
+            sock.sendall(json.dumps({'command': list(args)}).encode() + b'\n')
+            sock.recv(4096)
+        return True
+    except OSError:
+        return False
+
+
+def is_paused():
+    """目前是不是暫停中。沒有播放中的歌就回 False。"""
+    return bool(_mpv_query('pause'))
+
+
+def set_pause(paused: bool) -> bool:
+    """暫停 / 繼續播放。
+
+    用 mpv 的 IPC 直接設 pause 屬性——歌曲留在原處不會重新載入，
+    所以「繼續」是接著原本的位置播，不是從頭開始
+    （跟原聲/伴奏切換不一樣，那個是重新搜尋播放另一個版本）。
+    """
+    with _lock:
+        if _now_playing is None:
+            return False
+    return _mpv_command('set_property', 'pause', bool(paused))
+
+
+def toggle_pause():
+    """切換暫停狀態，回傳切換後是不是暫停中（沒歌可播回 None）。"""
+    with _lock:
+        if _now_playing is None:
+            return None
+    now = is_paused()
+    return (not now) if set_pause(not now) else now
+
+
 def _pick_radio_song(category):
     """挑下一首電台歌曲。**同一次播放期間不會重複**。
 
@@ -449,13 +489,16 @@ def get_status():
         q = [s.to_dict() for s in _queue]
     time_pos = None
     duration = None
+    paused = False
     if now is not None:
         time_pos = _mpv_query('time-pos')
         duration = _mpv_query('duration')
+        paused = bool(_mpv_query('pause'))
     return {
         'now_playing': now,
         'time_pos': time_pos,
         'duration': duration,
+        'paused': paused,
         'queue': q,
         'radio_category': _radio_category,
     }

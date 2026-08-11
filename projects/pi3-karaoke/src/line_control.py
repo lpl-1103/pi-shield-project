@@ -60,6 +60,7 @@ MENU_TEXT = (
     "  推薦 <歌手>        = 不知道歌名時，推薦該歌手前5首熱門歌，回數字直接點\n"
     "  排隊              = 查看目前播放/排隊列表\n"
     "  切歌 / 刪除 <編號> / 頂歌 <編號>\n"
+    "  暫停 / 繼續        = 暫停或接著播（從原本位置繼續，不會重頭）\n"
     "  原聲 / 伴奏        = 切換目前播放的版本\n"
     "  停止              = 停止播放並清空排隊\n"
     "  熱門 kpop/中文/英文 = 隨機連續播放熱門歌曲，直到「暫停熱門」\n"
@@ -364,8 +365,6 @@ KARAOKE_HTML = """<!DOCTYPE html>
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
     color: var(--text);
     padding: 22px 16px 60px;
-    max-width: 480px;
-    margin: 0 auto;
     background:
       radial-gradient(circle at 12% 8%, var(--bg-b) 0%, transparent 45%),
       radial-gradient(circle at 90% 15%, var(--bg-c) 0%, transparent 40%),
@@ -373,7 +372,22 @@ KARAOKE_HTML = """<!DOCTYPE html>
       var(--bg-a);
     background-attachment: fixed;
   }
-  .topbar { text-align: center; margin-bottom: 20px; }
+  /* 手機維持單欄（原本的體驗不變）；桌機自動變兩欄，
+     左邊放「正在播 + 歌詞」這種要一直盯著的，右邊放操作類的。
+     用 grid + max-width 切換，不是兩套版面，所以只有一份 HTML 要維護。 */
+  .wrap { max-width: 480px; margin: 0 auto; }
+  .layout { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+  @media (min-width: 900px) {
+    body { padding: 32px 28px 60px; }
+    .wrap { max-width: 1180px; }
+    .layout { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 22px; }
+    .col { display: grid; gap: 18px; align-content: start; }
+    .col-left { position: sticky; top: 24px; }
+  }
+  @media (min-width: 1320px) {
+    .layout { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 26px; }
+  }
+  .topbar { text-align: center; margin-bottom: 22px; }
   .topbar .kicker {
     font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
     color: var(--sub); font-weight: 700;
@@ -382,6 +396,10 @@ KARAOKE_HTML = """<!DOCTYPE html>
     font-size: 24px; margin: 4px 0 0; font-weight: 800; letter-spacing: -.01em;
     background: var(--brand);
     -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  @media (min-width: 900px) {
+    .topbar { text-align: left; margin-bottom: 26px; }
+    .topbar h1 { font-size: 30px; }
   }
   .card {
     background: var(--card);
@@ -441,6 +459,11 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .btn.ghost {
     background: rgba(120,110,160,.14); color: var(--text);
   }
+  /* 暫停鍵是這張卡片最常按的動作，給它實心底色拉出層級；
+     暫停中時換成綠色的「繼續」，狀態一眼看得出來。 */
+  .btn.primary { background: var(--brand); }
+  .btn.primary.resume { background: var(--brand2); }
+  .np-actions + .np-actions { margin-top: 8px; }
 
   /* ---- Lyrics ---- */
   .lyrics-box {
@@ -529,62 +552,73 @@ KARAOKE_HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+  <div class="wrap">
   <div class="topbar">
     <div class="kicker">Pi3 Shield · Live Karaoke</div>
     <h1>🎤 點歌系統</h1>
   </div>
 
-  <div class="card" id="now-playing-card">
-    <div class="np-head">
-      <div class="vinyl" id="vinyl"></div>
-      <div id="now-playing" class="np-info"><div class="np-title dim">目前沒有播放中的歌曲</div></div>
+  <div class="layout">
+    <div class="col col-left">
+      <div class="card" id="now-playing-card">
+        <div class="np-head">
+          <div class="vinyl" id="vinyl"></div>
+          <div id="now-playing" class="np-info"><div class="np-title dim">目前沒有播放中的歌曲</div></div>
+        </div>
+        <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+        <div class="progress-time" id="progress-time"></div>
+        <div class="np-actions">
+          <button class="btn primary" id="pause-btn" onclick="togglePause()">⏸ 暫停</button>
+          <button class="btn ghost" onclick="skip()">⏭ 切歌</button>
+        </div>
+        <div class="np-actions">
+          <button class="btn" onclick="setMode('original')">🎤 原聲</button>
+          <button class="btn alt" onclick="setMode('instrumental')">🎹 伴奏</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">✨ 歌詞</div>
+        <div class="lyrics-box" id="lyrics"><div class="lyric-line dim">目前沒有播放</div></div>
+      </div>
     </div>
-    <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
-    <div class="progress-time" id="progress-time"></div>
-    <div class="np-actions">
-      <button class="btn ghost" onclick="skip()">⏭ 切歌</button>
-      <button class="btn" onclick="setMode('original')">🎤 原聲</button>
-      <button class="btn alt" onclick="setMode('instrumental')">🎹 伴奏</button>
+
+    <div class="col col-right">
+      <div class="card">
+        <div class="section-title">🎶 點歌</div>
+        <div class="add-row">
+          <span class="icon">🔍</span>
+          <input id="song-input" type="text" placeholder="輸入歌名或 YouTube 網址" onkeydown="if(event.key==='Enter')addSong()" />
+        </div>
+        <div class="segmented">
+          <button id="mode-original" class="seg-btn active" onclick="selectMode('original')">🎤 原聲</button>
+          <button id="mode-instrumental" class="seg-btn" onclick="selectMode('instrumental')">🎹 伴奏</button>
+        </div>
+        <button class="add-btn" onclick="addSong()">➕ 加入排隊</button>
+      </div>
+
+      <div class="card">
+        <div class="section-title">🔥 熱門歌曲・隨機連播</div>
+        <div class="radio-status" id="radio-status">目前沒有在隨機播放</div>
+        <div class="grid-3">
+          <button id="radio-kpop" class="radio-btn kpop" onclick="startRadio('kpop')"><span class="emoji">💜</span>K-pop</button>
+          <button id="radio-cpop" class="radio-btn cpop" onclick="startRadio('cpop')"><span class="emoji">🏮</span>中文流行</button>
+          <button id="radio-epop" class="radio-btn epop" onclick="startRadio('epop')"><span class="emoji">🎧</span>英文流行</button>
+        </div>
+        <button class="btn ghost" style="width:100%; margin-top:10px" onclick="stopRadio()">⏸ 暫停熱門播放</button>
+      </div>
+
+      <div class="card">
+        <div class="section-title">📃 排隊列表</div>
+        <div id="queue-list"><div class="queue-empty">排隊中沒有歌曲</div></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">🕘 已播歌曲</div>
+        <div id="history-list"><div class="queue-empty">還沒有播放紀錄</div></div>
+      </div>
     </div>
   </div>
-
-  <div class="card">
-    <div class="section-title">✨ 歌詞</div>
-    <div class="lyrics-box" id="lyrics"><div class="lyric-line dim">目前沒有播放</div></div>
-  </div>
-
-  <div class="card">
-    <div class="section-title">🔥 熱門歌曲・隨機連播</div>
-    <div class="radio-status" id="radio-status">目前沒有在隨機播放</div>
-    <div class="grid-3">
-      <button id="radio-kpop" class="radio-btn kpop" onclick="startRadio('kpop')"><span class="emoji">💜</span>K-pop</button>
-      <button id="radio-cpop" class="radio-btn cpop" onclick="startRadio('cpop')"><span class="emoji">🏮</span>中文流行</button>
-      <button id="radio-epop" class="radio-btn epop" onclick="startRadio('epop')"><span class="emoji">🎧</span>英文流行</button>
-    </div>
-    <button class="btn ghost" style="width:100%; margin-top:10px" onclick="stopRadio()">⏸ 暫停熱門播放</button>
-  </div>
-
-  <div class="card">
-    <div class="section-title">🎶 點歌</div>
-    <div class="add-row">
-      <span class="icon">🔍</span>
-      <input id="song-input" type="text" placeholder="輸入歌名或 YouTube 網址" onkeydown="if(event.key==='Enter')addSong()" />
-    </div>
-    <div class="segmented">
-      <button id="mode-original" class="seg-btn active" onclick="selectMode('original')">🎤 原聲</button>
-      <button id="mode-instrumental" class="seg-btn" onclick="selectMode('instrumental')">🎹 伴奏</button>
-    </div>
-    <button class="add-btn" onclick="addSong()">➕ 加入排隊</button>
-  </div>
-
-  <div class="card">
-    <div class="section-title">📃 排隊列表</div>
-    <div id="queue-list"><div class="queue-empty">排隊中沒有歌曲</div></div>
-  </div>
-
-  <div class="card">
-    <div class="section-title">🕘 已播歌曲</div>
-    <div id="history-list"><div class="queue-empty">還沒有播放紀錄</div></div>
   </div>
 
 <script>
@@ -616,14 +650,20 @@ function renderNowPlaying(data) {
   const np = data.now_playing;
   const el = document.getElementById('now-playing');
   const vinyl = document.getElementById('vinyl');
+  const pauseBtn = document.getElementById('pause-btn');
   if (!np) {
     el.innerHTML = '<div class="np-title dim">目前沒有播放中的歌曲</div>';
     document.getElementById('progress-bar').style.width = '0%';
     document.getElementById('progress-time').textContent = '';
     vinyl.classList.remove('spinning');
+    pauseBtn.textContent = '⏸ 暫停';
+    pauseBtn.classList.remove('resume');
     return;
   }
-  vinyl.classList.add('spinning');
+  // 暫停時唱片停止轉動，讓「有沒有在播」用看的就知道，不用讀文字
+  vinyl.classList.toggle('spinning', !data.paused);
+  pauseBtn.textContent = data.paused ? '▶️ 繼續' : '⏸ 暫停';
+  pauseBtn.classList.toggle('resume', !!data.paused);
   const modeLabel = np.mode === 'instrumental' ? '伴奏版' : '原聲';
   const pillClass = np.mode === 'instrumental' ? 'pill alt' : 'pill';
   el.innerHTML = '<div class="np-title">' + escapeHtml(np.title) + '</div>' +
@@ -766,6 +806,15 @@ function priority(id) {
 
 function skip() {
   fetch('/api/karaoke/skip', {method: 'POST'}).then(poll);
+}
+
+function togglePause() {
+  // 先樂觀更新按鈕，不然要等下一次輪詢（最多 1.5 秒）才有回饋，按起來像沒反應
+  const btn = document.getElementById('pause-btn');
+  const willPause = !btn.classList.contains('resume');
+  btn.textContent = willPause ? '▶️ 繼續' : '⏸ 暫停';
+  btn.classList.toggle('resume', willPause);
+  fetch('/api/karaoke/pause', {method: 'POST'}).then(poll).catch(poll);
 }
 
 function setMode(mode) {
@@ -1417,6 +1466,15 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
         return '\n'.join(lines)
     if lowered in ('排隊', '查詢', 'queue', '歌單'):
         return _format_queue_text()
+    if lowered in ('暫停', '暫停播放', 'pause', '暫停音樂'):
+        state = karaoke.toggle_pause()
+        if state is None:
+            return '目前沒有播放中的歌曲'
+        return '⏸ 已暫停（傳「繼續」接著播）' if state else '▶️ 已繼續播放'
+    if lowered in ('繼續', '繼續播放', 'resume', 'play', '播放繼續'):
+        if karaoke.set_pause(False):
+            return '▶️ 已繼續播放'
+        return '目前沒有播放中的歌曲'
     if lowered in ('切歌', 'skip'):
         karaoke.skip()
         return '⏭ 已切歌，播放下一首'
@@ -1604,6 +1662,19 @@ def api_karaoke_priority():
         return jsonify({'status': 'error', 'message': 'missing id'}), 400
     karaoke.move_to_front(song_id)
     return jsonify({'status': 'ok'})
+
+
+@app.route('/api/karaoke/pause', methods=['POST'])
+def api_karaoke_pause():
+    """暫停/繼續。不帶參數就是切換；帶 {"paused": true/false} 就是指定狀態。"""
+    data = request.get_json(force=True, silent=True) or {}
+    if 'paused' in data:
+        ok = karaoke.set_pause(bool(data['paused']))
+        return jsonify({'status': 'ok' if ok else 'error', 'paused': bool(data['paused'])})
+    state = karaoke.toggle_pause()
+    if state is None:
+        return jsonify({'status': 'error', 'message': 'nothing playing'}), 400
+    return jsonify({'status': 'ok', 'paused': state})
 
 
 @app.route('/api/karaoke/skip', methods=['POST'])
