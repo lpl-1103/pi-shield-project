@@ -46,7 +46,11 @@ with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
 STT_BASE_URL = _config.get('stt_base_url', '')
 LOCAL_API = _config.get('voice_local_api', 'http://127.0.0.1:8000')
 
-RATE = 16000          # whisper 就是吃 16k
+# 用晶片原生的 48kHz 錄，不要讓 ALSA 幫我們降到 16k。
+# 頻譜分析顯示子音頻段（1000~3400Hz，中文辨識的關鍵）訊噪比只有 +4.6dB，
+# 經過 ALSA 的軟體重採樣很可能又被抹掉一些細節。
+# whisper 自己會做高品質重採樣，直接餵 48k 給它比較保險。
+RATE = 48000
 CHANNELS = 1
 SAMPLE_WIDTH = 2      # S16_LE
 CHUNK_BYTES = int(RATE * 0.1) * SAMPLE_WIDTH * CHANNELS
@@ -58,7 +62,11 @@ GAIN_STATE = os.path.expanduser('~/.voice_mic_gain')
 # 削波（振幅頂到 32767）會嚴重破壞辨識——實測削波時「我要聽稻香」被聽成
 # 「我要聽到香了」。太小聲同樣辨識不出來。所以每次錄完看峰值自動修正。
 CLIP_PEAK = 30000     # 超過就算削波，要降增益
-QUIET_PEAK = 4000     # 低於就算太小聲，要升增益
+QUIET_PEAK = 18000    # 低於就算太小聲，要升增益
+# QUIET_PEAK 原本設 4000 太保守：實測人聲峰值 6969 就不再調整，
+# 等於只用掉滿刻度的 21%、白白浪費 4 倍餘裕。
+# 而子音頻段的訊噪比只有 +4.6dB（辨識的瓶頸就在這），
+# 訊號本身拉大是少數還能改善它的手段。目標拉到 55~90% 之間。
 MIN_SPEECH_SEC = 0.5  # 開關按太快（不到半秒）當作誤觸，不送辨識
 MAX_SPEECH_SEC = 60   # 忘記關麥克風的保險，錄到這麼長就先送出去
 
