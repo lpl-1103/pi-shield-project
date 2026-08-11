@@ -1540,6 +1540,27 @@ def manual_page():
     return MANUAL_HTML
 
 
+@app.route('/api/voice', methods=['POST'])
+def api_voice():
+    """給 voice_control.py（麥克風語音控制守護程式）用的入口。
+
+    刻意只收「已經去掉喚醒詞的純指令文字」，然後丟進跟 LINE 完全一樣的
+    handle_command()——所有既有規則、@提及、推薦、NLU fallback 全部原封不動重用，
+    語音跟打字走的是同一條路，不會有兩套行為不一致的問題。
+
+    只開放給本機（127.0.0.1）呼叫，避免區網上任何人都能對麥克風端點下指令。
+    """
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        return jsonify({'status': 'error', 'message': 'local only'}), 403
+    data = request.get_json(force=True, silent=True) or {}
+    text = (data.get('text') or '').strip()
+    if not text:
+        return jsonify({'status': 'error', 'message': 'empty text'}), 400
+    base_url = f"https://{request.host}"
+    reply = handle_command(text, base_url=base_url, user_id=None)
+    return jsonify({'status': 'ok', 'reply': reply})
+
+
 @app.route('/api/karaoke/status', methods=['GET'])
 def api_karaoke_status():
     status = karaoke.get_status()

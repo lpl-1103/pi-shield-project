@@ -660,3 +660,435 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 1. LINE 傳「天氣」有沒有正常回覆
 2. LINE 傳「熱門 中文」開電台，看連續播幾十首有沒有重複
 3. LINE 傳「常點」（要先有點歌紀錄才會有東西）
+
+---
+
+# 2026-08-11：三個新功能正式部署完成 + 抓到 ngrok 網域被搶走
+
+接續上一節。使用者要求「正確部署好，先測試新增的 3 個功能」。結論：**三個功能全部
+驗證通過並已在正式服務上生效**，但過程中發現一個上一節沒注意到、會讓 LINE 機器人
+從外網完全失效的問題。
+
+## 上一節說「服務還沒重啟」，實際上已經生效了
+
+上一節留的待辦是「明天第一件事：`systemctl restart line-control`」。但實測發現
+**不需要**——樹莓派在 12:01 重新開機過（`uptime` 只有 7 分鐘、主程式 PID 902 是開機
+時就起來的），而新檔案是 11:24 傳上去的，**開機時 systemd 就已經載入新版程式碼了**。
+
+用 sha256 逐檔比對本機 `src/` 跟樹莓派 `~/` 的五個檔案（`karaoke.py`、`line_control.py`、
+`radio_pool.py`、`song_stats.py`、`weather.py`），全部 MATCH，確認部署內容正確。
+
+**教訓**：判斷「服務有沒有吃到新程式碼」不要只看交接文件寫什麼，比對
+`systemctl show -p ActiveEnterTimestamp` 跟檔案 mtime 才準——中間如果有重開機，
+待辦事項可能已經被動完成了。
+
+## ⚠ 真正的問題：ngrok 固定網域被 Mac 搶走，LINE 訊息根本沒送到樹莓派
+
+`ngrok-tunnel.service` 狀態是 `activating (auto-restart)`、**已經失敗重試 145 次**，
+log 全是坑 #2 / #12 的 `ERR_NGROK_334 endpoint already online`。
+
+但詭異的是外網打 `https://hurling-narrow-expend.ngrok-free.dev/karaoke` 卻回 200——
+一開始差點誤判成「還是正常的」。**實際抓內容才發現回來的是 OpenClaw Control 的
+HTML，不是點歌系統的頁面**：
+
+    公開網址 /karaoke  -> <title>OpenClaw Control</title>     ← 錯的
+    樹莓派本機 /karaoke -> <title>🎤 點歌系統</title>          ← 對的
+
+根因：Mac 上的 `~/Library/LaunchAgents/local.ngrok.plist`（`ngrok http 18789`，
+轉發給 openclaw）**又被重新載入了**（七月份明明已經 unload 過，見坑 #2；plist 一直
+沒刪，`RunAtLoad` + `KeepAlive`，Mac 只要重開機就會自己回來）。它雖然沒指定
+`--url=`，但免費帳號只有一個固定網域，ngrok 會自動把那個網域配給它，等於把樹莓派
+的網域整個接管走。
+
+**結果就是：LINE 使用者傳的訊息全部送到 openclaw，樹莓派完全收不到。**
+
+### 修法
+
+跟使用者確認過後（改動 Mac 上的服務，比照坑 #8 的規矩先問過才動手）：
+
+    launchctl unload ~/Library/LaunchAgents/local.ngrok.plist
+
+**不需要 sudo、也不需要手動重啟樹莓派的服務**——`ngrok-tunnel.service` 本來就設了
+`Restart=on-failure` 一直在重試，網域一放開，20 秒內自己就接手了：
+
+    ActiveState=active  SubState=running
+    tunnels: ['https://hurling-narrow-expend.ngrok-free.dev']
+
+先確認過**樹莓派的 NLU / 語音辨識走的是區網**（`nlu_base_url` 跟 `stt_base_url` 都是
+`lpldeMac-mini-2.local`，不經過這條隧道），所以關掉 Mac 這條不會影響口語理解跟語音
+點歌，才動手的。
+
+### ⚠ 這件事會再發生
+
+`local.ngrok.plist` **還留在 `~/Library/LaunchAgents/`**，`launchctl unload` 只在這次
+登入階段有效。**Mac 下次重開機/重新登入，它就會自己回來、再把網域搶走一次。**
+要根治的話得把 plist 改名或移走（例如加 `.disabled` 後綴），但那會讓 openclaw 永遠
+沒有公開隧道——目前看起來沒有任何東西需要它，不過這是使用者要決定的，沒有自作主張。
+
+**以後只要「LINE 機器人突然沒反應」，第一個檢查這個**：
+
+    curl -s https://hurling-narrow-expend.ngrok-free.dev/karaoke | head -c 100
+
+回來的是 `🎤 點歌系統` 就正常；是 `OpenClaw Control` 就是又被搶走了。
+**只看 HTTP 狀態碼會被騙**（兩邊都回 200），一定要看內容。
+
+## 三個功能的實測結果
+
+### ✅ 1. 天氣
+
+樹莓派上直接跑 `weather.report()`，以及走 `handle_command('天氣')`／`('氣溫')` 都正常：
+
+    🌤 新北市三重　毛毛雨　目前 27°C（體感 35°C）
+    濕度 98%　今日 25~32°C　降雨機率 100%
+
+### ✅ 2. 熱門電台不重複（本次最重要的需求）
+
+在樹莓派上連抓 **70 首**（超過使用者要求的 4 小時 ≈ 60 首）：
+
+    第  10 首  不重複  10  重複 0  池子  41
+    第  40 首  不重複  40  重複 0  池子  41
+    第  50 首  不重複  50  重複 0  池子 101   ← 池子快見底時自動補
+    第  70 首  不重複  70  重複 0  池子 101
+
+    總結: 70 首, 不重複 70, 重複 0
+
+**池子見底會自動補**：跑到第 40 幾首時池子只剩幾首，`pick()` 裡的同步 `_extend()`
+補了一批，池子從 41 長到 101，完全沒有中斷或重複。
+
+也走正式服務實際測過：`POST /api/karaoke/radio` 開電台 → 切歌 → 電台自動接手，
+播出的是「Jackson Wang 王嘉爾 ╳ Mayday Ashin [ Alive ]」——**不在寫死的
+`POPULAR_SONGS` 12 首清單裡**，證明真的是從動態池來的，不是備援清單。
+
+### ✅ 3. 常點歌曲資料庫
+
+完整跑過一輪「真的播一首 → 進資料庫 → 指令查得到」：
+
+1. `POST /api/karaoke/add` 點播「稻香」，確認 `time_pos` 真的在跑（有播出來）
+2. 查資料庫：`{'n': 1, 'songs': 1, 'people': 1}`，記到了
+3. `handle_command('熱門排行')` 正確列出來、附「回覆數字 1~5 直接點播」
+
+**電台的歌確實沒被記進去**：電台播了一首之後再查，資料庫還是 `n=1` 沒變，
+確認 `_record_history()` 裡 `startswith('🔀')` 的過濾有生效。
+
+⚠ **測試過程中我自己踩的坑**：一開始直接呼叫 `song_stats.record()` 傳一個 `🔀` 開頭
+的 requester，結果它照樣寫進去，差點誤判成 bug。**過濾邏輯不在 `record()` 裡面，
+在呼叫端 `karaoke._record_history()`**（`record()` 的 docstring 也明講「電台自動播的
+不要呼叫這支」）。以後要驗證這個行為，要測 `_record_history()` 那一層，不是 `record()`。
+
+## 測試留下的東西
+
+- 正式的 `~/karaoke_stats.sqlite` 裡有一筆我測試用的紀錄：requester 是 **`部署測試`**、
+  歌是周杰倫〈稻香〉。留著不影響功能（之後真實使用的資料會蓋過它），要刪的話：
+
+      ssh lpl1103@192.168.0.17 "python3 -c \"import sqlite3;c=sqlite3.connect('/home/lpl1103/karaoke_stats.sqlite');c.execute(\\\"delete from plays where requester='部署測試'\\\");c.commit()\""
+
+- 測完已經把電台停掉、佇列清空（`radio_category: None`、`now_playing: None`、`queue: []`），
+  沒有留音樂在播。
+
+## 測試小技巧：不搶 GPIO 也能測 handle_command()
+
+想在樹莓派上直接測 `handle_command()`，但 `line_control` 一 import 就會去抓 GPIO，
+跟正在跑的服務衝突（會噴 `lgpio.error: GPIO not allocated`）。解法是 import 前先擋掉
+`RPi`，讓 `pi3_control.py` 走它自己的 `MockGPIO` 分支：
+
+    import sys; sys.modules['RPi'] = None
+    import line_control as lc
+    print(lc.handle_command('天氣', base_url='https://example.dev', user_id='Utest...'))
+
+正式服務完全不受影響（照樣在跑），只是這個測試 process 自己用假的 GPIO。
+
+---
+
+# 2026-08-11（續）：修好 openclaw + LM Studio 本地模型（LINE bot 的 LLM 能力）
+
+使用者澄清：LINE bot 跟 openclaw 本來就該共存——LINE bot 負責點歌邏輯，openclaw 接
+本地模型（LM Studio 的 qwen3）提供「聽得懂口語」的能力。這個架構七月就建好了
+（`nlu.py` + `karaoke-nlu` agent），但搬辦公室之後整條鏈路是斷的。修好了，全部實測通過。
+
+**先澄清一個誤會**：上一節停掉 Mac 的 `local.ngrok` **沒有**影響 openclaw 本身。
+openclaw 還是在 18789 正常跑，樹莓派是走**區網**呼叫它（不經過那條隧道）。
+被停掉的只是 openclaw 的「對外公開隧道」，點歌系統用不到。
+
+## 斷在哪：一共三個獨立的問題疊在一起
+
+### 1. Mac 的主機名稱變了
+
+`lpldeMac-mini-2` -> **`lpldeMac-mini-4`**（macOS 在新網路遇到名稱衝突會自動加編號）。
+樹莓派設定檔還指向舊名稱，`curl` 舊名稱回 HTTP 000。
+
+改 `~/pi3_line_config.json` 的 `nlu_base_url` / `stt_base_url` 成新名稱（有先備份）。
+
+⚠ **這個名稱之後還可能再變**（每換一次網路就可能 +1）。以後 NLU 突然失效，
+第一個就查這個：`scutil --get LocalHostName`，然後比對 Pi 設定檔。
+
+### 2. ollama 死了，而 openclaw 的預設模型指向它
+
+這是最關鍵、也最難看出來的一個。症狀是打 `openclaw/karaoke-nlu` 一律回
+`upstream provider timeout`，而且**只花 1.5 秒**——快得不像 timeout。
+
+看 gateway log 才發現真相：請求根本沒去 LM Studio，而是去了
+`provider=ollama model=llama3.2:3b url=http://localhost:11434`。而 **ollama 已經沒在跑了**
+（Mac 重開機後沒自動啟動）。整個 log 裡 `provider=lmstudio` 出現次數是 **0**——
+代表 openclaw 從頭到尾沒真的用過 LM Studio。
+
+原因：`agents.defaults.model.primary` 還是 `ollama/llama3.2:3b`。
+雖然 `karaoke-nlu` agent 自己有 `model: lmstudio/qwen/qwen3-8b`，實際跑的時候仍然
+走了 defaults。
+
+**修法**：把 `agents.defaults.model.primary` 直接改成 `lmstudio/qwen/qwen3-8b`。
+這正好也是使用者要的（讓 openclaw 用 LM Studio 的 qwen3），順便擺脫對 ollama 的依賴。
+
+**教訓**：`upstream provider timeout` 不一定是「太慢」，也可能是**打到了錯的 provider**。
+一定要看 gateway log 的 `[model-fetch] start provider=...` 那行確認實際打去哪，
+不要只看錯誤訊息猜。
+
+### 3. qwen3 是 reasoning 模型，thinking 會拖垮回應時間
+
+修好前兩項之後可以動了，但**一次要 27.8 秒**（`reasoning_tokens: 311`）——
+`nlu.py` 的 timeout 只有 8 秒，必定失敗。
+
+openclaw 的 `chat_template_kwargs: {enable_thinking: false}` 在這條路徑上**沒有生效**
+（設了還是照樣 thinking）。有效的是 qwen3 原生的 **`/no_think` 前綴**：
+
+    有 thinking：27.8 秒（reasoning_tokens 311）
+    加 /no_think： 2.8 秒（reasoning_tokens 1）
+
+`nlu.py` 改成在使用者訊息前面自動加 `/no_think `，並把 timeout 從 8 秒放寬到 **25 秒**
+（平常約 2~5 秒就回來；但如果 LM Studio 把模型從記憶體卸載了，重新載入要約 19 秒，
+timeout 太短第一個使用者一定失敗）。也加了 `<think>` 區塊的過濾當保險。
+
+另外在 openclaw 設了 `models.providers.lmstudio.timeoutSeconds: 300`
+（官方文件就是建議「slow local models」這樣設）。
+
+## 順手補的：讓 NLU 認得今天新增的三個指令
+
+`nlu.py` 的 SYSTEM_PROMPT 原本只列舊指令，所以「今天天氣如何」會被判無法辨識。
+把 `常點` / `熱門排行` / `天氣` 加進合法指令清單跟範例。
+
+⚠ 加完第一次測試時「我最常點哪些歌」被翻成 **`點歌 常點`**（多了前綴，會變成去
+YouTube 搜尋「常點」這首歌）。在 prompt 裡明確加一條規則才修好：
+「常點/熱門排行/天氣/切歌/停止是完整指令，前面絕對不可以加『點歌』兩個字」。
+
+## 實測結果（都是在樹莓派上跑真的 qwen3）
+
+    '我想聽周杰倫的稻香'  -> '點歌 周杰倫 稻香'  (4.7s)
+    '可以跳過這首嗎'      -> '切歌'             (2.1s)
+    '先暫停一下音樂'      -> '停止'             (2.1s)
+    '有沒有推薦五月天的歌' -> '推薦 五月天'       (2.3s)
+    '放一些韓文歌來聽'    -> '熱門 kpop'        (2.1s)
+    '今天天氣如何'        -> '天氣'
+    '外面會不會下雨'      -> '天氣'
+    '我最常點哪些歌'      -> '常點'
+    '我常點什麼'          -> '常點'
+    '大家最愛點什麼歌'    -> '熱門排行'
+    '你叫什麼名字'        -> None（正確地不亂猜）
+
+**九項全對**，比七月份那次的七成準確率好很多（`/no_think` 讓輸出乾淨很多是主因）。
+
+端對端也用真實簽章的 LINE webhook 從公開網址測過：送「我想聽五月天的溫柔」，
+gateway log 出現 `provider=lmstudio model=qwen/qwen3-8b status=200`，
+樹莓派真的開始播〈溫柔〉。
+
+## ⚠ 重啟服務的替代方法（不用 sudo 密碼）
+
+這台 sudo 要密碼，照坑 #10 不代替使用者輸入。但 `line-control.service` 是用
+`User=lpl1103` 跑的，所以可以自己送訊號讓 systemd 重啟：
+
+    kill -9 $(pgrep -f 'python3 /home/lpl1103/line_control.py')
+
+**一定要用 `-9`（SIGKILL）**：systemd 的 `Restart=on-failure` 把 SIGTERM 當成「正常結束」
+不會重啟，SIGKILL 才算失敗會觸發重啟。送出後約 5~10 秒服務自己回來。
+**動之前先確認沒有音樂在播**（`pgrep mpv`），不然 mpv 會變成孤兒程序。
+
+## 現在的完整架構
+
+    LINE 使用者口語
+      -> ngrok(hurling-narrow-expend) -> 樹莓派 192.168.0.17:8000
+      -> handle_command() 既有規則比對（點歌/切歌/天氣/常點...）
+      -> 都比對不到 -> nlu.py -> http://lpldeMac-mini-4.local:18789/v1/chat/completions
+                                  (model=openclaw/karaoke-nlu, 前綴 /no_think)
+      -> openclaw karaoke-nlu agent -> LM Studio http://localhost:1234 -> qwen3-8b
+      -> 翻成一行指令 -> 遞迴丟回 handle_command() 執行
+      -> 還是不認得 -> 回「不認識的指令」（跟以前一樣，不會誤觸發）
+
+語音點歌另外走 `stt.py` -> Mac 的 whisper server (8765)，同樣已更新成新主機名稱。
+
+---
+
+# 2026-08-11（續二）：USB 麥克風語音控制（喚醒詞「小P」）
+
+使用者要「像智慧音響那樣」用麥克風語音控制點歌系統，喚醒詞定為「小P」。
+
+## 硬體：WM8960 板上的麥克風是壞的，改用 USB 麥克風
+
+先試了樹莓派上原有的 WM8960 音效板（`arecord -l` 有列出 capture 裝置），
+**錄到的是精準的振幅 0**——連環境底噪、電路底噪都沒有。測過：
+- 三種裝置路徑（`hw:0,0` / `plughw:0,0` / `default`）
+- 兩種取樣率（16k / 48k）
+- 三條輸入線路（LINPUT1 / LINPUT2 / LINPUT3，把 2/3 的增益從 0 拉滿也試過）
+
+全部都是 0。增益設定本身是對的（LINPUT1 滿檔 29dB、Capture 開著 12dB），
+所以不是設定問題，是**訊號根本沒進到 ADC**。測完已把改動的 mixer 還原。
+結論：**這片板子的麥克風不能用，不要再花時間**。
+
+改插 USB 麥克風（C-Media / TI PCM2902，`lsusb` 顯示 `08bb:2902`）：
+- 掛在 **card 4**，裝置字串 `plughw:4,0`
+- ⚠ **`arecord -l` 裡它的短名稱是 `Device`**，完全看不出是麥克風。
+  第一版偵測程式用 `\S+` 只抓短名稱去比對 "usb"，結果漏掉它、退回去用沒作用的
+  WM8960。**要比對整行**（整行才有 `[USB PnP Sound Device]`）。
+
+### USB 麥克風增益要調，預設是 0
+
+插上去預設 `Mic` 增益是 **0（0%）**，錄到的等於只有殘餘噪音，
+Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
+
+調整過程（這支麥克風的甜蜜點）：
+- 增益 0 → 振幅 2497（太小，辨識失敗）
+- 增益 14 + AGC 開 → 振幅 32767 **削波失真**，辨識更糟（`And the mast mast mast`）
+- **增益 8、AGC 關 → 振幅 8407（26% 滿刻度），辨識成功** ✅
+
+    amixer -c 4 sset 'Auto Gain Control' off
+    amixer -c 4 sset Mic 8 unmute
+
+⚠ ALSA 設定重開機不會保留（見前面 WM8960 的坑），之後如果語音突然失效，
+先查 `amixer -c 4 sget Mic` 是不是又變回 0。
+
+## whisper server 加了語言鎖定 + 領域提示
+
+`~/.whisper_server/whisper_server.py` 原本沒指定語言，收音稍差就猜成英文吐亂碼。
+加了兩個參數：
+- `language='zh'` —— 這系統只講中文，直接鎖定
+- `initial_prompt` —— 塞入喚醒詞、指令詞、常見歌手/歌名，
+  讓它對專有名詞優先往這些詞去對
+
+實測同一段音檔：改之前 `小屁 我想聽到響`，改之後 `小P、我想聽到聲音。`
+（喚醒詞從「小屁」變成正確的「小P」）。
+
+## voice_control.py（新檔，樹莓派 systemd 服務）
+
+    arecord 持續錄音 -> 純 Python 算 RMS 做 VAD
+    -> 講完一句丟給 Mac 的 whisper -> 轉成文字
+    -> 文字裡有喚醒詞才處理（沒有就丟掉，這是擋掉喇叭音樂的關鍵）
+    -> 剝掉喚醒詞，POST 給 line_control 的 /api/voice 執行
+
+**刻意不裝 numpy / pyaudio / sounddevice**：這台是最小化安裝，
+而且 Python 3.13 已經把 `audioop` 移除了。RMS 用 `struct` + 純 Python 算，
+一次只算 0.1 秒（1600 點），效能綽綽有餘。
+
+### 踩到的三個坑（都已修）
+
+1. **`overrun!!! (at least 23446 ms long)`**
+   辨識+執行指令要 20 秒以上，原本在主迴圈裡同步做，那段期間沒人讀 arecord 的輸出，
+   緩衝區溢位、使用者講的話全丟。**改成背景執行緒 + queue**，錄音迴圈永不阻塞。
+
+2. **噪音尖峰誤觸發 -> Whisper 幻覺**
+   這支麥克風底噪高（RMS≈1850）且會突然衝到 2700+。原本門檻 `底噪+500` 太近，
+   一直被噪音觸發、錄到 1.4 秒純雜訊，Whisper 就吐出重複迴圈幻覺：
+   `比例比例比例…`、`南、南、南…`、`張張張張…`
+   修法有三層：
+   - 門檻改成 `max(底噪×1.5, 底噪+900)`
+   - **要連續 3 個 chunk（0.3 秒）都超過門檻**才算人聲，單一尖峰不理會
+   - 加 `looks_hallucinated()` 過濾重複輸出（同一字元佔比 >50%、
+     或不重複字元佔比 <25% 就丟掉）。有寫單元測試，3 個真實幻覺樣本全擋、
+     5 個正常指令全放行。
+
+3. **句子被切太早**
+   原本 `SILENCE_HOLD_SEC=0.8`，訊噪比差時句中換氣就被判定講完，
+   「小P我想聽稻香」只錄到 1.9 秒、歌名被截斷。改成 **1.2 秒**後錄到 4.7 秒，正常。
+
+## line_control.py 新增 /api/voice
+
+給語音守護程式用的入口，**只收已經去掉喚醒詞的純指令文字**，
+然後丟進跟 LINE 完全一樣的 `handle_command()`——語音跟打字走同一條路，
+不會有兩套行為。**只允許 127.0.0.1 呼叫**（外部回 403，已實測），
+避免區網上任何人都能對麥克風端點下指令。
+
+## NLU 加了同音字修正
+
+語音辨識最大的問題是同音字：稻香 -> 道香/到響/到聲/到像。
+在 `nlu.py` 的 system prompt 加了「使用者的話可能是語音辨識轉來的，
+有同音字錯誤請自動更正成正確歌名」，並列了對照範例。
+
+實測**有講歌手時很準**（`我想聽周杰倫的告白汽球` -> `點歌 周杰倫 告白氣球` ✅），
+**只講歌名時大約一半機率**（`道香` 有時修正成 `稻香`、有時原樣輸出）。
+→ **給使用者的建議：講歌名時盡量帶上歌手名。**
+
+## ⚠ LM Studio 會塞車，不要連發請求
+
+測試時連續打了 6 個請求，每個樹莓派端 25 秒逾時放棄，
+但 **LM Studio 那邊還在繼續算**，請求一路堆積，狀態卡在 `PROCESSINGPROMPT`，
+之後連最簡單的直接呼叫都要 **63 秒**。
+
+等它消化完（`lms ps` 回到 `IDLE`）再測，延遲就回到正常的 **3~8 秒**。
+真實使用是一個人偶爾講一句，不會觸發這個問題，但**寫測試腳本時每次之間要留間隔**。
+
+## 現在的服務清單（樹莓派）
+
+| 服務 | 用途 | 開機自啟 |
+|---|---|---|
+| `line-control` | LINE 機器人 + 點歌系統 + 網頁 | ✅ |
+| `ngrok-tunnel` | 對外隧道 | ✅ |
+| `voice-control` | 麥克風語音控制（新增） | ✅ |
+
+## sudo 已改成免密碼（限縮範圍）
+
+使用者自己執行了設定，`/etc/sudoers.d/lpl1103-nopasswd` 只開放
+`systemctl` / `apt-get` / `apt` 三個指令，不是全開。
+所以現在可以直接 `sudo -n systemctl restart xxx`，不用再請使用者代跑。
+
+## 重新設計：麥克風實體開關 = 說話按鈕（取代 VAD）
+
+原本用音量偵測（VAD）猜使用者什麼時候講完，問題一堆：換氣被誤判成講完、
+歌名被切掉、喇叭的音樂會誤觸發、噪音尖峰觸發後 whisper 吐幻覺。
+
+使用者講出真正想要的流程後整個簡化了：
+
+    打開麥克風 -> 講話 -> 關掉麥克風 -> 執行指令 -> 音樂繼續放
+
+**關鍵**：這支麥克風的實體開關會讓整個 USB 裝置從系統消失，所以
+「錄音串流中斷」就是**明確的說完訊號**，比任何音量門檻都可靠。
+
+改完之後：
+- 不再需要 VAD、靜音門檻、連續 chunk 判斷那一整套
+- **喚醒詞變成可選**——打開麥克風本身就是意圖。有講「小P」就剝掉，沒講也照樣執行
+- 想講多久就講多久，不會被切斷
+
+實測流程完全正常：`🎤 麥克風已開啟` -> 錄 4.4 秒 -> `🔇 麥克風已關閉` ->
+轉文字 -> 剝喚醒詞 -> 執行。
+
+## 麥克風的自動化處理（都是實測踩出來的）
+
+1. **USB 重新列舉會把增益歸零**：用實體開關關掉再打開，ALSA 設定全部重設，
+   增益變 0 = 收不到聲音。所以每次偵測到裝置都要重設增益，不能只設一次。
+2. **增益自動適應**：講話大小聲、遠近都影響音量。削波（峰值 ≥30000）會嚴重
+   破壞辨識，太小聲也辨識不出來。每次錄完看峰值自動調整，存在 `~/.voice_mic_gain`。
+   實測：增益 14+AGC -> 峰值 32767 削波、辨識全錯；增益 8 -> 峰值 8407 正常。
+3. **絕不退回 WM8960**：偵測不到 USB 麥克風時要回報「沒有裝置」並等待，
+   不能退回那片故障的板子——那樣程式看起來在跑、實際永遠聽不到聲音，更難察覺。
+4. **錄音會保存**在 `~/voice_recordings/`（留最近 10 段），
+   這樣調辨識參數時可以拿真實音檔反覆測試，不用每次都麻煩使用者重講。
+
+## ⚠ 目前的瓶頸：這支 USB 麥克風訊噪比太差
+
+分析實際錄音（`~/voice_recordings/*.wav`）發現：
+
+    長度 0.88s  peak=4243  rms=2095
+    每 0.1 秒 RMS: 2070 2066 2050 2035 2053 2111 2154 2144
+    -> 估算 SNR ≈ 0.3 dB
+
+每個 chunk 音量幾乎一模一樣、完全沒有人聲該有的起伏，
+代表**那段錄音裡根本沒有有效人聲，全是底噪**。
+
+拿同一段音檔測四種 whisper 設定（鎖中文+長提示 / 只鎖中文 / 短提示 / 完全不設），
+全部都是幻覺輸出（`記得記得記得…`、`感谢观看`、`她她她她…`、`Thank you.`）。
+**這證明問題不在 whisper 參數，在收音本身。**
+
+實測辨識結果的規律：
+- 峰值 8407（26% 滿刻度）-> `小P、我想聽到聲音`（部分正確，喚醒詞對）
+- 峰值 32768（削波）-> `小P、我要聽到香了`（歌名全錯）
+- 峰值 4243 但無人聲起伏 -> 純幻覺
+
+**下一步該試的（依序）**：
+1. **講話離麥克風近一點（5~10 公分）**——距離加倍就少 6dB，這是最有效且免費的改善
+2. 如果還是不行，換一支收音品質好一點的麥克風（這支 C-Media/PCM2902 是最便宜那種）
+3. whisper 參數已經確認不是瓶頸，不用再花時間調
