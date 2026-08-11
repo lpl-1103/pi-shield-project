@@ -151,6 +151,26 @@ def to_wav_bytes(frames: bytes) -> bytes:
     return buf.getvalue()
 
 
+# 頭尾各修掉這麼多。只要夠蓋掉開關的「喀」聲就好——
+# 一開始設 0.35 秒太貪心：1.6 秒的錄音被切掉近一半，
+# 使用者的聲音可能整段被切進去，反而害辨識失敗。
+EDGE_TRIM_SEC = 0.15
+
+
+def trim_edges(frames: bytes) -> bytes:
+    """把錄音頭尾各切掉一小段。
+
+    使用者是用實體開關控制錄音，**撥動開關的「喀」聲會被錄進去**，
+    而且是極短的full-scale 尖峰——實測某段錄音峰值 31889（看起來像爆音），
+    但 95% 的音量其實只有 4399，代表爆的是開關聲不是人聲。
+    這個尖峰會（1）害自動增益誤判成講太大聲而調低（2）干擾 whisper 辨識。
+    """
+    cut = int(RATE * EDGE_TRIM_SEC) * SAMPLE_WIDTH
+    if len(frames) <= cut * 2 + RATE * SAMPLE_WIDTH // 2:
+        return frames        # 太短就不修，不然會沒東西剩
+    return frames[cut:-cut]
+
+
 def peak_of(frames: bytes) -> int:
     n = len(frames) // 2
     if n == 0:
@@ -225,8 +245,12 @@ def save_recording(frames: bytes) -> str | None:
 
 def process(frames: bytes, dur: float):
     """背景處理一段錄音：轉文字 -> 去喚醒詞 -> 執行。"""
-    peak = peak_of(frames)
+    # **存原始未修剪的音訊**——診斷時要看得到完整內容。
+    # 之前存修剪後的版本，害我一直在分析被自己切過的音檔，
+    # 看到 0.68 秒純底噪還以為是麥克風沒收到聲音。
     saved = save_recording(frames)
+    frames = trim_edges(frames)          # 再去掉開關的喀聲，才量音量跟辨識
+    peak = peak_of(frames)
     log(f'處理 {dur:.1f} 秒錄音（最大振幅 {peak}）{" 已存 " + os.path.basename(saved) if saved else ""}')
     adapt_gain(peak)          # 依這次的音量自動修正下次的增益
     if peak < 500:
