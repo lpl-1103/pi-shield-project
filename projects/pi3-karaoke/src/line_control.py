@@ -54,7 +54,7 @@ MENU_TEXT = (
     "help = 顯示這個列表\n"
     "面板 = 傳送可點擊的圖形控制面板連結\n"
     "\n"
-    "小樂電台（詳見操作手冊）：\n"
+    "小樂點歌台（詳見操作手冊）：\n"
     "  點歌 <歌名>       = 加入排隊（尾綴0=伴奏版，例如「點歌 小星星0」）\n"
     "  @任何稱呼 <歌名>   = 跟點歌一樣，更口語（例如「@小樂 稻香」）\n"
     "  推薦 <歌手>        = 不知道歌名時，推薦該歌手前5首熱門歌，回數字直接點\n"
@@ -330,40 +330,36 @@ KARAOKE_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>小樂電台</title>
+<title>小樂點歌台</title>
 <style>
   /* ================================================================
-     小樂電台 — Y2K 霓虹賽博 × 輕潮簡約
-     視覺原則（跟前一版最大的差別）：
+     小樂點歌台 — Y2K 霓虹賽博 × 輕潮簡約
+     視覺原則：
        1. 顏色靠「透」不靠「亮」——低飽和光暈穿過毛玻璃，不用實心彩色塊
        2. 不用邊框切割版面——用發光和模糊界定範圍
        3. 只做一套深色。這是 KTV 系統，使用場景就是昏暗的房間 + 音樂。
+     背景由四層構成：極光 → 模糊聲波 → 互動星空 → 顆粒。
      ================================================================ */
   :root {
     color-scheme: dark;
 
-    /* 底：深炭灰帶藍，不是純黑 */
-    --ink:    #0B0D14;
-    --ink-2:  #10131E;
-
-    /* 低飽和霓虹 / 馬卡龍 */
+    --ink:   #07080F;   /* 底：深炭灰帶藍，不是純黑 */
     --mist:  #7FA8D9;   /* 霧藍 */
     --taro:  #A88BE0;   /* 香芋紫 */
     --mint:  #6FE3C4;   /* 淺薄荷 */
     --blush: #E68FC8;   /* 粉紫 */
-    --sun:   #F0C98A;   /* 暖砂，只給峰值 */
+    --sun:   #F0C98A;   /* 暖砂，只給 VU 峰值 */
 
     --text:  #E8EAF4;
     --sub:   #949AB5;
     --dim:   #626883;
 
-    /* 毛玻璃 */
     --glass:    rgba(255,255,255,.055);
     --glass-hi: rgba(255,255,255,.10);
     --hairline: rgba(255,255,255,.07);
 
-    --r-lg: 30px;   /* 面板 */
-    --r-md: 20px;   /* 按鈕 */
+    --r-lg: 30px;
+    --r-md: 20px;
     --r-sm: 14px;
   }
 
@@ -375,49 +371,37 @@ KARAOKE_HTML = """<!DOCTYPE html>
     margin: 0; min-height: 100vh; position: relative; overflow-x: hidden;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
                  "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
-    color: var(--text);
-    background: var(--ink);
+    color: var(--text); background: var(--ink);
     padding: 26px 16px 72px;
   }
 
   /* ---------- 背景層 ---------- */
-  /* 極光：低飽和大光斑，緩慢飄移，是整頁顏色的來源 */
   .aurora { position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
             filter: blur(100px); will-change: transform; }
-  .au-1 { width: 66vw; height: 66vw; max-width: 780px; max-height: 780px;
-          top: -20vw; right: -14vw; opacity: .40;
+  .au-1 { width: 68vw; height: 68vw; max-width: 800px; max-height: 800px;
+          top: -22vw; right: -14vw; opacity: .48;
           background: radial-gradient(circle, var(--taro) 0%, transparent 66%);
           animation: au1 26s ease-in-out infinite alternate; }
-  .au-2 { width: 58vw; height: 58vw; max-width: 700px; max-height: 700px;
-          bottom: -18vw; left: -16vw; opacity: .30;
+  .au-2 { width: 60vw; height: 60vw; max-width: 720px; max-height: 720px;
+          bottom: -18vw; left: -16vw; opacity: .36;
           background: radial-gradient(circle, var(--mist) 0%, transparent 66%);
           animation: au2 33s ease-in-out infinite alternate; }
-  .au-3 { width: 40vw; height: 40vw; max-width: 500px; max-height: 500px;
-          top: 42%; left: 46%; opacity: .17;
+  .au-3 { width: 42vw; height: 42vw; max-width: 520px; max-height: 520px;
+          top: 44%; left: 44%; opacity: .22;
           background: radial-gradient(circle, var(--mint) 0%, transparent 68%);
           animation: au3 40s ease-in-out infinite alternate; }
   @keyframes au1 { to { transform: translate3d(-8vw, 7vh, 0) scale(1.15); } }
   @keyframes au2 { to { transform: translate3d(7vw, -6vh, 0) scale(1.10); } }
   @keyframes au3 { to { transform: translate3d(-10vw, -8vh, 0) scale(1.22); } }
 
-  /* 模糊聲波：播放時振幅變大 */
-  #wave { position: fixed; left: 0; right: 0; bottom: 0; width: 100%; height: 46vh;
-          z-index: 0; pointer-events: none; filter: blur(16px); opacity: .55; }
+  #wave  { position: fixed; left: 0; bottom: 0; width: 100%; height: 46vh;
+           z-index: 0; pointer-events: none; filter: blur(16px); opacity: .5; }
+  #stars { position: fixed; inset: 0; width: 100%; height: 100%;
+           z-index: 1; pointer-events: none; }
 
-  /* 顆粒 */
-  .grain { position: fixed; inset: 0; pointer-events: none; z-index: 1; opacity: .055;
+  .grain { position: fixed; inset: 0; pointer-events: none; z-index: 2; opacity: .05;
     mix-blend-mode: overlay;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E"); }
-
-  /* 游標光暈：帶緩動跟隨 */
-  .cursor-glow { position: fixed; top: 0; left: 0; width: 460px; height: 460px;
-    margin: -230px 0 0 -230px; border-radius: 50%; pointer-events: none; z-index: 2;
-    background: radial-gradient(circle, rgba(168,139,224,.16) 0%, rgba(127,168,217,.07) 42%, transparent 68%);
-    opacity: 0; transition: opacity .5s; will-change: transform; }
-  .ripple { position: fixed; border-radius: 50%; pointer-events: none; z-index: 3;
-    border: 1px solid rgba(232,143,200,.5); animation: rip .75s cubic-bezier(.2,.7,.3,1) forwards; }
-  @keyframes rip { from { width: 0; height: 0; margin: 0; opacity: .85; }
-                   to   { width: 260px; height: 260px; margin: -130px 0 0 -130px; opacity: 0; } }
 
   .wrap { position: relative; z-index: 4; max-width: 480px; margin: 0 auto; }
   .layout { display: grid; grid-template-columns: 1fr; gap: 18px; align-items: start; }
@@ -455,19 +439,19 @@ KARAOKE_HTML = """<!DOCTYPE html>
   @keyframes breathe { 50% { opacity: .35; } }
 
   .wordmark {
-    font-size: 38px; font-weight: 900; letter-spacing: .04em; margin: 12px 0 0;
+    font-size: 36px; font-weight: 900; letter-spacing: .04em; margin: 12px 0 0;
     background: linear-gradient(105deg, var(--mist) 0%, var(--taro) 38%, var(--blush) 66%, var(--mint) 100%);
     -webkit-background-clip: text; background-clip: text; color: transparent;
-    filter: drop-shadow(0 0 22px rgba(168,139,224,.35));
+    filter: drop-shadow(0 0 22px rgba(168,139,224,.4));
   }
   .brand-sub { font-size: 9.5px; letter-spacing: .42em; text-transform: uppercase;
                color: var(--dim); margin-top: 9px; }
   @media (min-width: 900px) {
     .brand { text-align: left; margin-bottom: 30px; }
-    .wordmark { font-size: 52px; }
+    .wordmark { font-size: 50px; }
   }
 
-  /* ---------- 面板：不用邊框，用光暈界定 ---------- */
+  /* ---------- 面板 ---------- */
   .panel {
     position: relative; border-radius: var(--r-lg); padding: 24px;
     background: var(--glass);
@@ -476,15 +460,13 @@ KARAOKE_HTML = """<!DOCTYPE html>
     margin-bottom: 18px; overflow: hidden;
   }
   .col .panel { margin-bottom: 0; }
-  /* 內部高光跟著游標跑 */
   .panel::before {
     content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
-    background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 0%),
-                rgba(255,255,255,.07), transparent 62%);
+    background: radial-gradient(380px circle at var(--mx, 50%) var(--my, 0%),
+                rgba(255,255,255,.08), transparent 62%);
     opacity: 0; transition: opacity .4s;
   }
   .panel:hover::before { opacity: 1; }
-  /* 沒有邊框，改用一圈極淡的漸層描邊 */
   .panel::after {
     content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
     padding: 1px;
@@ -505,86 +487,123 @@ KARAOKE_HTML = """<!DOCTYPE html>
            padding: 3px 10px; border-radius: 999px; }
   .muted { color: var(--sub); font-weight: 400; }
 
-  /* ---------- 3D 唱盤 ---------- */
-  .deck-stage { perspective: 1100px; perspective-origin: 50% 26%;
-                display: flex; justify-content: center; padding: 4px 0 6px; }
-  .deck {
-    position: relative; width: 236px; height: 236px; flex-shrink: 0;
-    transform-style: preserve-3d;
-    transform: rotateX(53deg) rotateZ(calc(-14deg + var(--tz, 0deg))) rotateY(var(--ty, 0deg));
-    transition: transform .5s cubic-bezier(.2,.7,.3,1);
+  /* ================= 3D 唱盤機 ================= */
+  .deck-stage {
+    position: relative; min-height: 280px; margin: -6px -10px 0;
+    display: flex; align-items: center; justify-content: center;
+    perspective: 1200px; perspective-origin: 50% 34%;
   }
-  @media (min-width: 900px) { .deck { width: 290px; height: 290px; } .deck-stage { padding: 10px 0 14px; } }
+  @media (min-width: 900px) { .deck-stage { min-height: 350px; margin: 0 0 4px; } }
 
-  /* 盤體：用堆疊 box-shadow 做出厚度 */
+  /* --- 光圈：兩圈反向旋轉的霓虹環 + 一層柔光 --- */
+  .halo { position: absolute; width: 268px; height: 268px; pointer-events: none; }
+  @media (min-width: 900px) { .halo { width: 340px; height: 340px; } }
+  .halo .ring { position: absolute; inset: 0; border-radius: 50%;
+    -webkit-mask: radial-gradient(circle, transparent 0 66%, #000 67.5%, #000 70%, transparent 71.5%);
+    mask: radial-gradient(circle, transparent 0 66%, #000 67.5%, #000 70%, transparent 71.5%);
+    animation: ring-a 16s linear infinite; }
+  .halo .ring.r1 { background: conic-gradient(from 0deg,
+      transparent 0deg, var(--taro) 46deg, var(--blush) 96deg, transparent 168deg,
+      transparent 200deg, var(--mist) 268deg, transparent 330deg); opacity: .85; }
+  .halo .ring.r2 { inset: -16px; animation: ring-b 26s linear infinite; opacity: .45;
+    background: conic-gradient(from 140deg,
+      transparent 0deg, var(--mint) 60deg, transparent 130deg,
+      transparent 250deg, var(--taro) 310deg, transparent 360deg); }
+  .halo .bloom { position: absolute; inset: 8%; border-radius: 50%;
+    background: radial-gradient(circle, rgba(168,139,224,.30) 0%, rgba(127,168,217,.10) 46%, transparent 70%);
+    filter: blur(18px); transition: opacity .6s; opacity: .5; }
+  .deck-stage.live .halo .bloom { opacity: 1; }
+  .deck-stage.live .halo .ring.r1 { animation-duration: 9s; }
+  @keyframes ring-a { to { transform: rotate(360deg); } }
+  @keyframes ring-b { to { transform: rotate(-360deg); } }
+
+  /* --- 盤體 --- */
+  .deck {
+    position: relative; width: 244px; height: 176px; flex-shrink: 0;
+    transform-style: preserve-3d;
+    transform: rotateX(57deg) rotateZ(calc(-19deg + var(--rz, 0deg))) rotateY(var(--ry, 0deg));
+  }
+  @media (min-width: 900px) { .deck { width: 306px; height: 220px; } }
+
+  /* 厚度：一層層 box-shadow 疊出板子的側面 */
   .deck-base {
-    position: absolute; inset: 0; border-radius: 40px;
-    background: linear-gradient(150deg, #232739 0%, #171b28 46%, #101320 100%);
+    position: absolute; inset: 0; border-radius: 26px;
+    background: linear-gradient(152deg, #262b3e 0%, #1a1f2e 44%, #0f1320 100%);
     box-shadow:
-      0 2px 0 #1a1e2c, 0 4px 0 #181c29, 0 6px 0 #161926, 0 8px 0 #131623,
-      0 10px 0 #111420, 0 12px 0 #0f121d, 0 14px 0 #0d101a,
-      0 40px 60px rgba(0,0,0,.62),
-      inset 0 1px 0 rgba(255,255,255,.10);
+      0 2px 0 #1d2130, 0 4px 0 #1b1f2d, 0 6px 0 #191d2a, 0 8px 0 #171b27,
+      0 10px 0 #151924, 0 12px 0 #131721, 0 14px 0 #11151e, 0 16px 0 #0f131b,
+      0 18px 0 #0d1118, 0 20px 0 #0b0f15,
+      0 46px 70px rgba(0,0,0,.68),
+      inset 0 1px 0 rgba(255,255,255,.13);
   }
+  /* 盤面刻字 */
+  .deck-etch {
+    position: absolute; left: 7%; bottom: 9%; pointer-events: none;
+    font-size: 11px; font-weight: 900; letter-spacing: .12em; line-height: 1.5;
+    color: rgba(255,255,255,.20);
+    text-shadow: 0 1px 0 rgba(255,255,255,.07), 0 -1px 0 rgba(0,0,0,.55);
+  }
+  .deck-etch small { display: block; font-size: 7px; font-weight: 700;
+                     letter-spacing: .34em; color: rgba(255,255,255,.13); margin-top: 3px; }
+  @media (min-width: 900px) { .deck-etch { font-size: 13px; } .deck-etch small { font-size: 8px; } }
+
   .platter {
-    position: absolute; left: 50%; top: 50%; width: 74%; height: 74%;
-    margin: -37% 0 0 -37%; border-radius: 50%;
-    background: radial-gradient(circle, #1c2030 0%, #0f1220 78%);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.05), inset 0 0 30px rgba(0,0,0,.8);
+    position: absolute; left: 4%; top: 50%; width: 148px; height: 148px;
+    margin-top: -74px; border-radius: 50%;
+    background: radial-gradient(circle, #20263a 0%, #0e111d 78%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), inset 0 0 34px rgba(0,0,0,.85);
   }
+  @media (min-width: 900px) { .platter { width: 186px; height: 186px; margin-top: -93px; } }
   .record {
-    position: absolute; inset: 6%; border-radius: 50%;
+    position: absolute; inset: 5%; border-radius: 50%;
     background:
-      repeating-radial-gradient(circle, rgba(255,255,255,.055) 0 1px, transparent 1px 5px),
+      repeating-radial-gradient(circle, rgba(255,255,255,.06) 0 1px, transparent 1px 5px),
       conic-gradient(from 0deg,
-        #191d2c 0deg, #2b3149 34deg, #171b29 78deg, #262b40 132deg,
-        #161a28 190deg, #2f3550 244deg, #181c2b 300deg, #191d2c 360deg);
-    box-shadow: inset 0 0 40px rgba(0,0,0,.85), 0 0 34px rgba(168,139,224,.18);
+        #181c2b 0deg, #303650 32deg, #161a28 76deg, #2a3048 130deg,
+        #151927 188deg, #343a56 242deg, #171b2a 298deg, #181c2b 360deg);
+    box-shadow: inset 0 0 42px rgba(0,0,0,.88), 0 0 40px rgba(168,139,224,.22);
   }
-  .record.spinning { animation: spin 2.6s linear infinite; }
+  .record.spinning { animation: spin 2.4s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .rec-label {
-    position: absolute; left: 50%; top: 50%; width: 34%; height: 34%;
-    margin: -17% 0 0 -17%; border-radius: 50%;
-    background: linear-gradient(135deg, var(--taro), var(--blush) 55%, var(--mist));
-    box-shadow: 0 0 22px rgba(232,143,200,.42), inset 0 -2px 6px rgba(0,0,0,.3);
+    position: absolute; left: 50%; top: 50%; width: 33%; height: 33%;
+    margin: -16.5% 0 0 -16.5%; border-radius: 50%;
+    background: conic-gradient(from 210deg, var(--mint), var(--mist) 22%, var(--taro) 52%, var(--blush) 78%, var(--mint));
+    box-shadow: 0 0 26px rgba(232,143,200,.5), inset 0 -2px 6px rgba(0,0,0,.35);
     display: flex; align-items: center; justify-content: center;
   }
   .rec-label::after { content: ''; width: 14%; height: 14%; border-radius: 50%;
-                      background: #0B0D14; box-shadow: inset 0 0 4px rgba(0,0,0,.9); }
+                      background: #07080F; box-shadow: inset 0 0 4px rgba(0,0,0,.9); }
 
-  /* 唱針：播放時擺進盤面，停止時歸位 */
+  /* 唱針：待機停在外側，播放時擺進盤面 */
   .tonearm {
-    position: absolute; right: 7%; top: 11%; width: 46%; height: 8px;
-    transform-origin: calc(100% - 9px) 50%;
-    transform: rotate(34deg);
-    transition: transform .9s cubic-bezier(.4,.05,.2,1);
+    position: absolute; right: 6%; top: 12%; width: 42%; height: 8px;
+    transform-origin: calc(100% - 10px) 50%;
+    transform: rotate(30deg);
+    transition: transform .95s cubic-bezier(.4,.05,.2,1);
   }
-  .tonearm.on { transform: rotate(64deg); }
-  .tonearm .arm {
-    position: absolute; left: 14px; right: 12px; top: 3px; height: 3px; border-radius: 2px;
-    background: linear-gradient(90deg, #767c95, #9aa1bd);
-    box-shadow: 0 1px 3px rgba(0,0,0,.6);
-  }
-  .tonearm .pivot {
-    position: absolute; right: 0; top: 50%; width: 19px; height: 19px; margin-top: -9.5px;
-    border-radius: 50%; background: radial-gradient(circle at 35% 30%, #444b63, #1d2130);
-    box-shadow: 0 3px 8px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.16);
-  }
-  .tonearm .head {
-    position: absolute; left: 0; top: 50%; width: 15px; height: 9px; margin-top: -4.5px;
-    border-radius: 3px; background: linear-gradient(135deg, #9aa1bd, #545a74);
-    box-shadow: 0 2px 5px rgba(0,0,0,.55);
-  }
-  /* 盤面上的指示燈 */
-  .deck-leds { position: absolute; left: 9%; bottom: 8%; display: flex; gap: 8px; }
-  .deck-leds i { width: 7px; height: 7px; border-radius: 50%;
-                 background: rgba(255,255,255,.10); transition: all .4s; }
-  .deck-leds i.on:nth-child(1) { background: var(--mint); box-shadow: 0 0 10px var(--mint); }
-  .deck-leds i.on:nth-child(2) { background: var(--blush); box-shadow: 0 0 10px var(--blush); }
+  .tonearm.on { transform: rotate(62deg); }
+  .tonearm .arm { position: absolute; left: 15px; right: 13px; top: 3px; height: 3px;
+    border-radius: 2px; background: linear-gradient(90deg, #7a8099, #a3aac6);
+    box-shadow: 0 1px 3px rgba(0,0,0,.65); }
+  .tonearm .pivot { position: absolute; right: 0; top: 50%; width: 20px; height: 20px;
+    margin-top: -10px; border-radius: 50%;
+    background: radial-gradient(circle at 34% 28%, #4a5169, #1b1f2e);
+    box-shadow: 0 3px 9px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.18); }
+  .tonearm .head { position: absolute; left: 0; top: 50%; width: 16px; height: 9px;
+    margin-top: -4.5px; border-radius: 3px;
+    background: linear-gradient(135deg, #a3aac6, #565d78);
+    box-shadow: 0 2px 5px rgba(0,0,0,.6); }
+
+  .deck-leds { position: absolute; right: 8%; bottom: 12%; display: flex; gap: 9px; }
+  .deck-leds i { width: 8px; height: 8px; border-radius: 50%;
+                 background: rgba(255,255,255,.09);
+                 box-shadow: inset 0 1px 2px rgba(0,0,0,.6); transition: all .4s; }
+  .deck-leds i.on:nth-child(1) { background: var(--mint); box-shadow: 0 0 12px var(--mint); }
+  .deck-leds i.on:nth-child(2) { background: var(--blush); box-shadow: 0 0 12px var(--blush); }
 
   /* ---------- 現正播放 ---------- */
-  .np { margin-top: 18px; text-align: center; }
+  .np { margin-top: 14px; text-align: center; }
   @media (min-width: 900px) { .np { text-align: left; } }
   .np-title {
     font-size: 21px; font-weight: 800; line-height: 1.3; letter-spacing: -.01em;
@@ -596,10 +615,8 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .np-sub { font-size: 12px; color: var(--sub); margin-top: 10px;
             display: flex; align-items: center; gap: 8px; justify-content: center; flex-wrap: wrap; }
   @media (min-width: 900px) { .np-sub { justify-content: flex-start; } }
-  .chip {
-    padding: 4px 12px; border-radius: 999px; font-size: 10.5px; font-weight: 800;
-    letter-spacing: .06em; color: var(--taro); background: rgba(168,139,224,.14);
-  }
+  .chip { padding: 4px 12px; border-radius: 999px; font-size: 10.5px; font-weight: 800;
+          letter-spacing: .06em; color: var(--taro); background: rgba(168,139,224,.14); }
   .chip.alt { color: var(--mint); background: rgba(111,227,196,.13); }
 
   .bar { height: 4px; border-radius: 99px; margin-top: 20px;
@@ -611,7 +628,7 @@ KARAOKE_HTML = """<!DOCTYPE html>
            font-variant-numeric: tabular-nums; letter-spacing: .08em;
            display: flex; justify-content: space-between; }
 
-  /* ---------- 按鈕：一律毛玻璃，沒有實心色塊 ---------- */
+  /* ---------- 按鈕：一律毛玻璃 ---------- */
   .row { display: flex; gap: 10px; margin-top: 18px; }
   .btn {
     flex: 1; padding: 14px 8px; border-radius: var(--r-md); border: none;
@@ -624,35 +641,27 @@ KARAOKE_HTML = """<!DOCTYPE html>
                box-shadow: inset 0 0 0 1px rgba(255,255,255,.13), 0 0 26px rgba(168,139,224,.22); }
   .btn:active { transform: scale(.965); }
   .btn:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
-  /* 啟用態＝染色的霧，不是實心 */
-  .btn.on {
-    color: #fff;
+  .btn.on { color: #fff;
     background: linear-gradient(140deg, rgba(168,139,224,.30), rgba(127,168,217,.16));
-    box-shadow: inset 0 0 0 1px rgba(168,139,224,.36), 0 0 30px rgba(168,139,224,.26);
-  }
-  .btn.on-mint {
-    color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(168,139,224,.36), 0 0 30px rgba(168,139,224,.26); }
+  .btn.on-mint { color: #fff;
     background: linear-gradient(140deg, rgba(111,227,196,.26), rgba(127,168,217,.14));
-    box-shadow: inset 0 0 0 1px rgba(111,227,196,.34), 0 0 30px rgba(111,227,196,.22);
-  }
+    box-shadow: inset 0 0 0 1px rgba(111,227,196,.34), 0 0 30px rgba(111,227,196,.22); }
 
-  /* ---------- 歌詞：半透浮層，不被框死 ---------- */
+  /* ---------- 歌詞：半透浮層 ---------- */
   .lyrics-float {
     position: relative; padding: 26px 20px; border-radius: var(--r-lg);
     background: radial-gradient(120% 100% at 50% 0%, rgba(255,255,255,.05), transparent 72%);
     min-height: 168px; display: flex; flex-direction: column;
-    justify-content: center; gap: 15px; text-align: center;
-    margin-bottom: 18px;
+    justify-content: center; gap: 15px; text-align: center; margin-bottom: 18px;
   }
   .col .lyrics-float { margin-bottom: 0; }
   @media (min-width: 900px) { .lyrics-float { min-height: 206px; } }
   .ly { font-size: 14px; color: var(--dim); transition: all .45s cubic-bezier(.2,.7,.3,1);
         overflow-wrap: anywhere; }
   .ly.near { color: var(--sub); }
-  .ly.cur {
-    font-size: 23px; font-weight: 800; color: #fff; letter-spacing: -.01em;
-    text-shadow: 0 0 18px rgba(232,143,200,.55), 0 0 44px rgba(168,139,224,.4);
-  }
+  .ly.cur { font-size: 23px; font-weight: 800; color: #fff; letter-spacing: -.01em;
+    text-shadow: 0 0 18px rgba(232,143,200,.55), 0 0 44px rgba(168,139,224,.4); }
   @media (min-width: 900px) { .ly.cur { font-size: 30px; } }
 
   /* ---------- 音場 ---------- */
@@ -694,10 +703,8 @@ KARAOKE_HTML = """<!DOCTYPE html>
     box-shadow: inset 0 0 0 1px rgba(111,227,196,.4), 0 0 26px rgba(111,227,196,.16);
   }
   .field .ic { color: var(--dim); font-size: 13px; }
-  .field input {
-    flex: 1; min-width: 0; border: none; background: transparent; color: var(--text);
-    font-size: 15px; padding: 14px 4px; outline: none;
-  }
+  .field input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text);
+                 font-size: 15px; padding: 14px 4px; outline: none; }
   .field input::placeholder { color: var(--dim); }
   .hint { font-size: 11px; color: var(--dim); margin-top: 10px; min-height: 16px; letter-spacing: .02em; }
 
@@ -737,30 +744,24 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .rbtn.epop.on { background: linear-gradient(140deg, rgba(111,227,196,.26), rgba(127,168,217,.16));
                   box-shadow: inset 0 0 0 1px rgba(111,227,196,.4), 0 0 30px rgba(111,227,196,.26); }
 
-  /* ---------- 清單：極淡分隔，不用線條硬切 ---------- */
+  /* ---------- 清單 ---------- */
   .empty { color: var(--dim); font-size: 13px; text-align: center; padding: 20px 0; }
-  .item {
-    display: flex; align-items: center; gap: 13px; padding: 13px 10px;
-    border-radius: var(--r-sm); margin: 0 -10px; transition: background .25s;
-  }
+  .item { display: flex; align-items: center; gap: 13px; padding: 13px 10px;
+          border-radius: var(--r-sm); margin: 0 -10px; transition: background .25s; }
   .item + .item { box-shadow: inset 0 1px 0 rgba(255,255,255,.045); }
   .item:hover { background: rgba(255,255,255,.04); }
-  .idx {
-    width: 30px; height: 30px; border-radius: 11px; flex-shrink: 0;
-    font-size: 11.5px; font-weight: 800; color: var(--taro);
-    background: rgba(168,139,224,.14);
-    display: flex; align-items: center; justify-content: center;
-  }
+  .idx { width: 30px; height: 30px; border-radius: 11px; flex-shrink: 0;
+         font-size: 11.5px; font-weight: 800; color: var(--taro);
+         background: rgba(168,139,224,.14);
+         display: flex; align-items: center; justify-content: center; }
   .idx.play { color: var(--mint); background: rgba(111,227,196,.13); }
   .it-info { flex: 1; min-width: 0; }
   .it-title { font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; word-break: break-word; }
   .it-sub { font-size: 11px; color: var(--dim); margin-top: 4px; overflow-wrap: anywhere; }
-  .mini {
-    width: 33px; height: 33px; border-radius: 11px; flex-shrink: 0; border: none; cursor: pointer;
-    font-size: 12px; font-weight: 700; color: var(--sub);
-    background: rgba(255,255,255,.05); box-shadow: inset 0 0 0 1px var(--hairline);
-    transition: all .2s;
-  }
+  .mini { width: 33px; height: 33px; border-radius: 11px; flex-shrink: 0; border: none; cursor: pointer;
+          font-size: 12px; font-weight: 700; color: var(--sub);
+          background: rgba(255,255,255,.05); box-shadow: inset 0 0 0 1px var(--hairline);
+          transition: all .2s; }
   .mini:hover { color: var(--text); background: rgba(255,255,255,.09); }
   .mini:active { transform: scale(.9); }
   .mini.del:hover { color: var(--blush); box-shadow: inset 0 0 0 1px rgba(232,143,200,.32); }
@@ -768,9 +769,9 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .hist { cursor: pointer; }
 
   @media (prefers-reduced-motion: reduce) {
-    .aurora, .record.spinning, .on-air.live i { animation: none; }
-    .vu span, .ly, .deck, .tonearm { transition: none; }
-    .cursor-glow, #wave { display: none; }
+    .aurora, .record.spinning, .on-air.live i, .halo .ring { animation: none; }
+    .vu span, .ly, .tonearm { transition: none; }
+    #wave, #stars { display: none; }
   }
 </style>
 </head>
@@ -779,22 +780,28 @@ KARAOKE_HTML = """<!DOCTYPE html>
   <div class="aurora au-2"></div>
   <div class="aurora au-3"></div>
   <canvas id="wave"></canvas>
+  <canvas id="stars"></canvas>
   <div class="grain"></div>
-  <div class="cursor-glow" id="cursor-glow"></div>
 
   <div class="wrap">
   <div class="brand">
     <div class="on-air" id="on-air"><i></i><span id="on-air-text">Standby</span></div>
-    <h1 class="wordmark">小樂電台</h1>
-    <div class="brand-sub">Siao Le Radio · Pi Shield</div>
+    <h1 class="wordmark">小樂點歌台</h1>
+    <div class="brand-sub">Siao Le Jukebox · Pi Shield</div>
   </div>
 
   <div class="layout">
     <div class="col col-left">
       <div class="panel" id="deck-panel">
-        <div class="deck-stage">
+        <div class="deck-stage" id="deck-stage">
+          <div class="halo">
+            <div class="bloom"></div>
+            <div class="ring r2"></div>
+            <div class="ring r1"></div>
+          </div>
           <div class="deck" id="deck">
             <div class="deck-base"></div>
+            <div class="deck-etch">小樂點歌台<small>ANALOG REQUEST DECK</small></div>
             <div class="platter">
               <div class="record" id="record"><div class="rec-label"></div></div>
             </div>
@@ -881,55 +888,164 @@ let currentLyrics = null;
 let currentLyricsTitle = null;
 let vuPlaying = false;
 
+/* 全域指標狀態，星空、唱盤、面板高光共用同一份 */
+const P = {x: -9999, y: -9999, has: false, burst: 0};
+
 function selectMode(mode) {
   selectedMode = mode;
   document.getElementById('mode-original').classList.toggle('on', mode === 'original');
   document.getElementById('mode-instrumental').classList.toggle('on', mode === 'instrumental');
 }
 
-/* ---------- 滑鼠互動 ---------- */
+/* ================= 互動星空 =================
+   每顆星有原點與速度，用彈簧拉回原點。游標會推開附近的星，
+   點擊會炸開一圈。靠近游標的星會變亮變大並跟游標連線。      */
+function initStars() {
+  if (reduceMotion) return;
+  const cv = document.getElementById('stars');
+  const ctx = cv.getContext('2d');
+  const TINT = ['255,255,255', '127,168,217', '168,139,224', '230,143,200', '111,227,196'];
+  const WEIGHT = [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 4];   /* 白色最多，彩色點綴 */
+  const R = 190, R2 = R * R;                                 /* 游標影響半徑 */
+  let W = 0, H = 0, dpr = 1, stars = [], shoot = [], t = 0, nextShoot = 120;
+
+  function build() {
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = Math.floor(W * dpr); cv.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const n = Math.round(Math.min(230, Math.max(90, W * H / 7200)));
+    stars = [];
+    for (let i = 0; i < n; i++) {
+      const z = Math.random();                    /* 深度：影響視差與大小 */
+      const ox = Math.random(), oy = Math.random();
+      stars.push({
+        ox: ox, oy: oy, x: ox * W, y: oy * H, vx: 0, vy: 0, z: z,
+        r: 0.5 + z * 1.5,
+        a: 0.25 + z * 0.5,
+        tint: TINT[WEIGHT[(Math.random() * WEIGHT.length) | 0]],
+        tp: Math.random() * 6.283,
+        ts: 0.6 + Math.random() * 1.6
+      });
+    }
+  }
+  build();
+  window.addEventListener('resize', build, {passive: true});
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    const parX = P.has ? (P.x - W / 2) * 0.022 : 0;
+    const parY = P.has ? (P.y - H / 2) * 0.022 : 0;
+    const near = [];
+
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      /* 彈簧拉回原點（含視差偏移） */
+      const hx = s.ox * W + parX * s.z, hy = s.oy * H + parY * s.z;
+      s.vx += (hx - s.x) * 0.014;
+      s.vy += (hy - s.y) * 0.014;
+
+      let dx = s.x - P.x, dy = s.y - P.y, d2 = dx * dx + dy * dy, glow = 0;
+      if (P.has && d2 < R2) {
+        const d = Math.sqrt(d2) || 1;
+        glow = 1 - d / R;
+        const push = glow * glow * (0.9 + P.burst * 9);   /* 點擊時推力放大 */
+        s.vx += (dx / d) * push;
+        s.vy += (dy / d) * push;
+        if (near.length < 26) near.push(s);
+      }
+      s.vx *= 0.90; s.vy *= 0.90;
+      s.x += s.vx; s.y += s.vy;
+
+      const tw = 0.55 + 0.45 * Math.sin(t * s.ts + s.tp);
+      const a = Math.min(1, s.a * tw + glow * 0.85);
+      const r = s.r * (1 + glow * 1.9);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, r, 0, 6.283);
+      ctx.fillStyle = 'rgba(' + s.tint + ',' + a.toFixed(3) + ')';
+      ctx.fill();
+      if (glow > 0.45 || (s.z > 0.85 && tw > 0.9)) {       /* 亮星加一圈暈 */
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, r * 3.4, 0, 6.283);
+        ctx.fillStyle = 'rgba(' + s.tint + ',' + (a * 0.11).toFixed(3) + ')';
+        ctx.fill();
+      }
+    }
+
+    /* 游標附近的星互相連線，形成星座 */
+    ctx.lineWidth = 0.7;
+    for (let i = 0; i < near.length; i++) {
+      const a = near[i];
+      const da = Math.hypot(a.x - P.x, a.y - P.y);
+      ctx.strokeStyle = 'rgba(168,139,224,' + (0.28 * (1 - da / R)).toFixed(3) + ')';
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(P.x, P.y); ctx.stroke();
+      for (let j = i + 1; j < near.length; j++) {
+        const b = near[j], dd = Math.hypot(a.x - b.x, a.y - b.y);
+        if (dd > 96) continue;
+        ctx.strokeStyle = 'rgba(127,168,217,' + (0.20 * (1 - dd / 96)).toFixed(3) + ')';
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+    }
+
+    /* 流星 */
+    if (--nextShoot <= 0) {
+      nextShoot = 260 + Math.random() * 520;
+      shoot.push({x: Math.random() * W * 0.7, y: Math.random() * H * 0.4,
+                  vx: 5 + Math.random() * 4, vy: 2.2 + Math.random() * 1.8, life: 1});
+    }
+    for (let i = shoot.length - 1; i >= 0; i--) {
+      const m = shoot[i];
+      m.x += m.vx; m.y += m.vy; m.life -= 0.014;
+      if (m.life <= 0) { shoot.splice(i, 1); continue; }
+      const g = ctx.createLinearGradient(m.x, m.y, m.x - m.vx * 13, m.y - m.vy * 13);
+      g.addColorStop(0, 'rgba(255,255,255,' + (m.life * 0.85).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(168,139,224,0)');
+      ctx.strokeStyle = g; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(m.x, m.y);
+      ctx.lineTo(m.x - m.vx * 13, m.y - m.vy * 13); ctx.stroke();
+    }
+
+    P.burst *= 0.88;
+    t += 0.016;
+    requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+/* ================= 指標：星空 / 唱盤 / 面板高光 ================= */
 function initPointer() {
   if (reduceMotion) return;
-  const glow = document.getElementById('cursor-glow');
   const deck = document.getElementById('deck');
-  let tx = window.innerWidth / 2, ty = window.innerHeight / 3;
-  let cx = tx, cy = ty, shown = false;
+  let ty = 0, tz = 0, cy = 0, cz = 0;
 
   window.addEventListener('pointermove', function (e) {
     if (e.pointerType === 'touch') return;
-    tx = e.clientX; ty = e.clientY;
-    if (!shown) { shown = true; glow.style.opacity = '1'; }
+    P.x = e.clientX; P.y = e.clientY; P.has = true;
     const p = e.target && e.target.closest ? e.target.closest('.panel') : null;
     if (p) {
       const r = p.getBoundingClientRect();
       p.style.setProperty('--mx', (e.clientX - r.left) + 'px');
       p.style.setProperty('--my', (e.clientY - r.top) + 'px');
     }
-    const nx = (e.clientX / window.innerWidth - 0.5) * 2;
-    const ny = (e.clientY / window.innerHeight - 0.5) * 2;
-    deck.style.setProperty('--ty', (nx * 7).toFixed(2) + 'deg');
-    deck.style.setProperty('--tz', (-ny * 5).toFixed(2) + 'deg');
+    ty = (e.clientX / window.innerWidth - 0.5) * 26;    /* 唱盤左右擺 */
+    tz = (e.clientY / window.innerHeight - 0.5) * -16;  /* 唱盤前後轉 */
   }, {passive: true});
 
-  document.addEventListener('pointerleave', function () { glow.style.opacity = '0'; shown = false; });
-
-  (function follow() {
-    cx += (tx - cx) * 0.09; cy += (ty - cy) * 0.09;
-    glow.style.transform = 'translate3d(' + cx.toFixed(1) + 'px,' + cy.toFixed(1) + 'px,0)';
-    requestAnimationFrame(follow);
-  })();
-
+  document.addEventListener('pointerleave', function () { P.has = false; ty = 0; tz = 0; });
   window.addEventListener('pointerdown', function (e) {
-    const r = document.createElement('div');
-    r.className = 'ripple';
-    r.style.left = e.clientX + 'px';
-    r.style.top = e.clientY + 'px';
-    document.body.appendChild(r);
-    setTimeout(function () { r.remove(); }, 800);
+    P.x = e.clientX; P.y = e.clientY; P.has = true; P.burst = 1;   /* 星星炸開 */
   }, {passive: true});
+
+  /* 用 rAF 補間，避免 CSS transition 造成的黏滯感 */
+  (function tilt() {
+    cy += (ty - cy) * 0.075; cz += (tz - cz) * 0.075;
+    deck.style.setProperty('--ry', cy.toFixed(2) + 'deg');
+    deck.style.setProperty('--rz', cz.toFixed(2) + 'deg');
+    requestAnimationFrame(tilt);
+  })();
 }
 
-/* ---------- 背景聲波：播放時振幅變大 ---------- */
+/* ================= 背景聲波 ================= */
 function initWave() {
   if (reduceMotion) return;
   const cv = document.getElementById('wave');
@@ -938,7 +1054,7 @@ function initWave() {
   let w = 0, h = 0, t = 0, amp = 0.22;
 
   function resize() {
-    // 刻意用低解析度畫布再拉滿版：外層有 blur，看不出來，但省很多效能
+    /* 刻意用低解析度畫布再拉滿版：外層有 blur，看不出來，但省很多填充率 */
     w = cv.width = Math.max(320, Math.min(760, Math.floor(window.innerWidth / 2)));
     h = cv.height = 190;
   }
@@ -946,8 +1062,7 @@ function initWave() {
   window.addEventListener('resize', resize, {passive: true});
 
   (function draw() {
-    const target = vuPlaying ? 1 : 0.22;
-    amp += (target - amp) * 0.04;
+    amp += ((vuPlaying ? 1 : 0.22) - amp) * 0.04;
     ctx.clearRect(0, 0, w, h);
     ctx.lineWidth = 2.4;
     for (let k = 0; k < 3; k++) {
@@ -1034,8 +1149,8 @@ function setLive(playing, hasSong) {
   air.classList.toggle('live', !!playing);
   document.getElementById('on-air-text').textContent =
     playing ? 'On Air' : (hasSong ? 'Paused' : 'Standby');
-  const tag = document.getElementById('live-tag');
-  tag.style.display = playing ? '' : 'none';
+  document.getElementById('live-tag').style.display = playing ? '' : 'none';
+  document.getElementById('deck-stage').classList.toggle('live', !!playing);
   document.getElementById('tonearm').classList.toggle('on', !!playing);
   const leds = document.getElementById('deck-leds').children;
   leds[0].classList.toggle('on', !!playing);
@@ -1242,6 +1357,7 @@ function setMode(mode) {
   }).then(poll);
 }
 
+initStars();
 initPointer();
 initWave();
 initInput();
@@ -1258,7 +1374,7 @@ DISPLAY_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>小樂電台 · 大螢幕</title>
+<title>小樂點歌台 · 大螢幕</title>
 <style>
   :root {
     --bg-a: #0a0818; --bg-b: #160e2e; --bg-c: #0c1622;
@@ -1472,7 +1588,7 @@ MANUAL_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>小樂電台 操作手冊</title>
+<title>小樂點歌台 操作手冊</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -1496,7 +1612,7 @@ MANUAL_HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <h1>🎤 小樂電台 操作手冊</h1>
+  <h1>🎤 小樂點歌台 操作手冊</h1>
   <p class="sub">在 LINE 聊天室直接傳文字指令，或打開 <a href="/karaoke">點歌網頁</a> 用按鈕操作，兩邊是同一份排隊，互相同步。</p>
 
   <h2>點歌</h2>
@@ -1759,7 +1875,7 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
     if '小樂' in key and '點歌' in key:
         if not base_url:
             return '點歌頁面連結目前無法產生'
-        return f"🎤 歡迎收聽小樂電台！\n點歌頁面：{karaoke_url}\n操作手冊：{manual_url}\n\n快速上手：直接傳「點歌 歌名」就能加入排隊囉！"
+        return f"🎤 歡迎收聽小樂點歌台！\n點歌頁面：{karaoke_url}\n操作手冊：{manual_url}\n\n快速上手：直接傳「點歌 歌名」就能加入排隊囉！"
     # ---- 常點歌曲（快捷點歌）----
     # 沿用推薦功能那套「回數字選歌」的機制：把清單暫存起來，
     # 使用者回 1~5 就直接點。**不另外發明一套互動方式**，
@@ -1853,7 +1969,7 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
         shield.relay_off()
         return '繼電器 關閉'
 
-    # ---------- 小樂電台 ----------
+    # ---------- 小樂點歌台 ----------
     if key.startswith('點歌') or key.startswith('播放'):
         query = key[2:].strip()
         if not query:
