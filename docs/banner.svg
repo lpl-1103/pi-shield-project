@@ -1,0 +1,77 @@
+<svg width="1200" height="400" viewBox="0 0 1200 400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="glowA" cx="15%" cy="20%" r="55%">
+      <stop offset="0%" stop-color="#3a2560" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#3a2560" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="88%" cy="15%" r="50%">
+      <stop offset="0%" stop-color="#1b3a52" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#1b3a52" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowC" cx="50%" cy="105%" r="60%">
+      <stop offset="0%" stop-color="#4a2040" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#4a2040" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="brand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c6ff5"/>
+      <stop offset="55%" stop-color="#c86fe0"/>
+      <stop offset="100%" stop-color="#ff6fa0"/>
+    </linearGradient>
+    <linearGradient id="brand2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#22c55e"/>
+    </linearGradient>
+    <radialGradient id="vinyl" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#241f3b"/>
+      <stop offset="55%" stop-color="#241f3b"/>
+      <stop offset="58%" stop-color="#7c6ff5"/>
+      <stop offset="100%" stop-color="#ff6fa0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="400" fill="#0b0817"/>
+  <rect width="1200" height="400" fill="url(#glowA)"/>
+  <rect width="1200" height="400" fill="url(#glowB)"/>
+  <rect width="1200" height="400" fill="url(#glowC)"/>
+
+  <!-- decorative sound bars -->
+  <g opacity="0.55">
+    <rect x="70" y="300" width="10" height="40" rx="5" fill="url(#brand)"/>
+    <rect x="90" y="270" width="10" height="70" rx="5" fill="url(#brand)"/>
+    <rect x="110" y="310" width="10" height="30" rx="5" fill="url(#brand)"/>
+    <rect x="130" y="255" width="10" height="85" rx="5" fill="url(#brand)"/>
+    <rect x="150" y="290" width="10" height="50" rx="5" fill="url(#brand)"/>
+  </g>
+  <g opacity="0.5">
+    <rect x="1020" y="295" width="10" height="45" rx="5" fill="url(#brand2)"/>
+    <rect x="1040" y="260" width="10" height="80" rx="5" fill="url(#brand2)"/>
+    <rect x="1060" y="305" width="10" height="35" rx="5" fill="url(#brand2)"/>
+    <rect x="1080" y="245" width="10" height="95" rx="5" fill="url(#brand2)"/>
+    <rect x="1100" y="285" width="10" height="55" rx="5" fill="url(#brand2)"/>
+  </g>
+
+  <!-- vinyl disc -->
+  <circle cx="220" cy="150" r="58" fill="url(#vinyl)"/>
+  <circle cx="220" cy="150" r="10" fill="#0b0817"/>
+  <circle cx="220" cy="150" r="58" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+
+  <!-- title -->
+  <text x="330" y="150" font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="30" font-weight="800" fill="#8b93b0" letter-spacing="6">PI SHIELD PROJECT</text>
+  <text x="330" y="215" font-family="-apple-system, 'PingFang TC', 'Microsoft JhengHei', 'Helvetica Neue', Arial, sans-serif" font-size="64" font-weight="800" fill="url(#brand)">🎤 樹莓派點歌 &amp; 硬體控制系統</text>
+  <text x="330" y="260" font-family="-apple-system, 'PingFang TC', 'Microsoft JhengHei', Arial, sans-serif" font-size="22" font-weight="500" fill="#c7c3de">Raspberry Pi · LINE Bot · YouTube Karaoke · Live Synced Lyrics</text>
+
+  <!-- pill badges -->
+  <g font-family="-apple-system, 'PingFang TC', Arial, sans-serif" font-size="16" font-weight="700">
+    <rect x="330" y="290" width="120" height="38" rx="19" fill="url(#brand)"/>
+    <text x="390" y="314" fill="#fff" text-anchor="middle">🎤 原聲</text>
+
+    <rect x="462" y="290" width="120" height="38" rx="19" fill="url(#brand2)"/>
+    <text x="522" y="314" fill="#fff" text-anchor="middle">🎹 伴奏</text>
+
+    <rect x="594" y="290" width="150" height="38" rx="19" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.18)"/>
+    <text x="669" y="314" fill="#e7e4f5" text-anchor="middle">🔥 熱門連播</text>
+
+    <rect x="756" y="290" width="150" height="38" rx="19" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.18)"/>
+    <text x="831" y="314" fill="#e7e4f5" text-anchor="middle">✨ 動態歌詞</text>
+  </g>
+</svg>

@@ -1,0 +1,25 @@
+# 主服務：Flask app（LINE Webhook + 網頁面板 + 點歌 API）
+#
+# 部署位置：/etc/systemd/system/line-control.service
+# 啟用：sudo systemctl enable --now line-control.service
+#
+# Restart=on-failure 是刻意的：systemd 把 SIGTERM 當正常結束、SIGKILL 當失敗。
+# 手動 stop 不會被拉起來，真的掛掉才會。
+
+[Unit]
+Description=Pi3 Shield LINE Bot + Karaoke System
+After=network-online.target
+Wants=network-online.target
+
+# ⚠ 換一台機器接手：下面的 lpl1103 是原作者的樹莓派帳號，要整批換成你自己的
+#    sed -i '' "s/lpl1103/<你的帳號>/g" deploy/*.service
+[Service]
+Type=simple
+User=lpl1103
+WorkingDirectory=/home/lpl1103
+ExecStart=/usr/bin/python3 /home/lpl1103/line_control.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

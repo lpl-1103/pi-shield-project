@@ -1,29 +1,24 @@
-# Claude Code tooling (not part of the project)
-.claude/
-.embedder/
-
-# Secrets — never commit these
+# 密鑰 —— 永遠不要 commit 真的那份，範本在 deploy/pi3_line_config.example.json
 pi3_line_config.json
-projects/pi3-karaoke/**/pi3_line_config.json
 *.pem
 *.key
 
-# OS / editor cruft
+# OS / 編輯器
 .DS_Store
 __pycache__/
 *.pyc
 
-# Python 虛擬環境（venv 自己會產生 .venv/.gitignore，但不要依賴那個）
+# Python 虛擬環境
 .venv/
 venv/
 
-# Empty/placeholder files
-code,ipynb
+# Claude Code 工具產生的，不屬於專案
+.claude/
 
-# Compiled vendor example binary (not source)
-projects/pi3-karaoke/pi3_basic/examples/blink/pir
+# 樹莓派上的執行期產物（不會出現在這裡，列著當保險）
+*.sqlite
+*.log
+voice_recordings/
 
-
-# 驗貨站有自己的 git repo，不要被外層 repo 當成 gitlink 追蹤
-# （加進來的話 clone 外層只會拿到一個空目錄）
-projects/am62a-inspection-station/
+# 廠商範例編譯出來的執行檔，不是原始碼
+pi3_basic/examples/blink/pir
