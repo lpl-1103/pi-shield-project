@@ -1,16 +1,23 @@
-# Pi3 Shield 鍵盤控制說明
+# Pi3 Shield 硬體控制說明
+
+> **這份文件的範圍**：樹莓派 3 + IT Shield v3.0 的硬體層（LED、蜂鳴器、繼電器），
+> 以及 LINE／網頁面板最初的接線方式。按鍵對照表與 API 規格仍然有效。
+>
+> ⚠ **連線資訊與啟動方式已經過期。** 系統現在跑在樹莓派 4 上、用 systemd 管理。
+> 現況、部署、維運一律以 [`HANDOFF.md`](HANDOFF.md) 第一部分為準。
+> 點歌系統的指令列表見 [專案 README](../README.md) 或機器人傳的 `/manual` 頁面。
 
 `pi3_control.py` 已改為**互動式終端機按鍵控制**（不再是網頁版），操作方式參考了你之前的測試檔
 `~/it_shield_led_keyboard.py`：程式會把終端機切成 raw 模式，按一下鍵就立刻觸發對應動作，不用按 Enter。
 
-檔案已經上傳到樹莓派：`/home/lpl_1103/pi3_control.py`（用 `RPi.GPIO`，跟舊版一樣，不需要 sudo）。
+檔案在樹莓派上是 `~/pi3_control.py`（用 `RPi.GPIO`，不需要 sudo）。
 
 ## 1. 怎麼執行
 
 用一般終端機（不是自動化腳本）SSH 進樹莓派，然後執行：
 
 ```bash
-ssh lpl_1103@192.168.1.53
+ssh lpl1103@raspberrypi.local     # 用 mDNS，不要寫死 IP（網段換過）
 python3 ~/pi3_control.py
 ```
 
@@ -111,7 +118,7 @@ LINE App --> LINE 官方伺服器 --> (Webhook) --> ngrok tunnel --> 樹莓派 F
 因為樹莓派在區網內、沒有公開 IP，LINE 的 Webhook 需要一個外網可連的 HTTPS 網址，所以用 **ngrok** 開一條通道把樹莓派的 8000 port 曝露出去。用的是你提供的固定網域：
 
 ```
-https://hurling-narrow-expend.ngrok-free.dev
+https://<ngrok-網域>.ngrok-free.dev
 ```
 
 > ⚠️ 這組 ngrok 帳號同時間只能有 1 條 tunnel 在線上。你原本有另一個本機 LLM 專案（launchd 服務 `local.ngrok`，轉發 port 18789）也在搶用同一個網域，設定完成當下已經先幫你 `launchctl unload` 停用。之後如果要重啟那個 LLM 專案的 tunnel，記得先把樹莓派這邊的 ngrok 停掉，不然兩邊會衝突（`ERR_NGROK_334`）。要恢復那個服務可以執行：
@@ -124,35 +131,30 @@ https://hurling-narrow-expend.ngrok-free.dev
 - `~/line_control.py`（樹莓派上）：Flask + Webhook 處理，會 import `pi3_control.py` 裡的 `Pi3Shield` 硬體邏輯。
 - `~/pi3_line_config.json`（樹莓派上，`chmod 600`，只有你的帳號能讀）：放 `channel_secret` 跟 `channel_access_token`，不會出現在程式碼裡。**這個檔案不要分享或上傳到任何公開的地方。**
 
-### 6.3 怎麼啟動（每次重開機或斷線後要做）
+### 6.3 怎麼啟動
 
-SSH 進樹莓派後：
+**現在由 systemd 管理，開機自動啟動，平常不用手動介入。**
+（下面這段取代了原本用 `nohup` + `disown` 手動起背景程序的做法。）
 
 ```bash
-# 1. 啟動控制伺服器（背景執行）
-cd ~
-nohup python3 line_control.py > line_control.log 2>&1 < /dev/null &
-disown
+systemctl status line-control ngrok-tunnel voice-control
+sudo systemctl restart line-control
 
-# 2. 啟動 ngrok tunnel（背景執行）
-nohup ngrok http --url=https://hurling-narrow-expend.ngrok-free.dev 8000 --log=stdout > ngrok.log 2>&1 < /dev/null &
-disown
-
-# 3. 確認狀態
-curl -s http://127.0.0.1:4040/api/tunnels   # 應該看到 hurling-narrow-expend.ngrok-free.dev
-tail -f ~/line_control.log                  # 看即時 log
+journalctl -u line-control -f     # 主程式日誌
+tail -f ~/voice.log               # 語音控制日誌（不在 journal）
 ```
 
-要停止的話找到對應的 process 用 `pkill -f line_control.py` 跟 `pkill -f "ngrok http"`。
-
-> ngrok 這組免費網域**目前**是固定的（`hurling-narrow-expend.ngrok-free.dev`），只要沒有跟你另一個 LLM 專案搶用，重開機後這個網址理論上不會變，不用每次都去 LINE 後台改 Webhook 網址。
+ngrok 用的是固定網域，所以重開機後網址不會變，不用每次去 LINE 後台改 Webhook。
+**但同一個免費網域同時只能有一個持有者**——如果別台機器也在跑 ngrok 搶同一個網域，
+公開網址會安靜地指向那台，而且**兩邊都回 HTTP 200**，光看狀態碼看不出來。
+詳見 `HANDOFF.md` §7.2。
 
 ### 6.4 最後一步：LINE Developers Console 設定（只有你能做，我沒有你的帳密登不進去）
 
 1. 登入 [LINE Developers Console](https://developers.line.biz/console/)，找到你自己那個 Messaging API channel（Channel secret 記錄在私人筆記/樹莓派上的 `pi3_line_config.json`，公開版不記錄實際值）。
 2. 進「Messaging API」分頁，找到 **Webhook URL**，填入：
    ```
-   https://hurling-narrow-expend.ngrok-free.dev/callback
+   https://<ngrok-網域>.ngrok-free.dev/callback
    ```
 3. 按 **Verify**，應該會顯示成功（我這邊已經先用假資料實際測過這條路徑，簽章驗證跟 Flask 都正常）。
 4. 把 **Use webhook** 打開（Enabled）。
@@ -167,7 +169,7 @@ tail -f ~/line_control.log                  # 看即時 log
 
 - 本地：指令解析（`handle_command`）、LINE 簽章驗證（HMAC-SHA256）、Flask `/callback` 路由（合法簽章 200、錯誤簽章 400）都測過，行為正確。
 - 樹莓派：Flask 伺服器啟動正常、ngrok tunnel 建立成功。
-- **端對端**：從外網（不是樹莓派本機、也不是區網內）直接打 `https://hurling-narrow-expend.ngrok-free.dev/callback`，送一個簽章正確的模擬 LINE 訊息（文字 `3`），確認：收到 200 OK，且用 `pinctrl get 5` / `pinctrl get 6` 讀到 LED1、LED2 真的變成 `hi`（通電），之後送 `0` 確認變回 `lo`。整條路徑（LINE 格式 → 外網 → ngrok → Flask → GPIO）跑通。
+- **端對端**：從外網（不是樹莓派本機、也不是區網內）直接打 `https://<ngrok-網域>.ngrok-free.dev/callback`，送一個簽章正確的模擬 LINE 訊息（文字 `3`），確認：收到 200 OK，且用 `pinctrl get 5` / `pinctrl get 6` 讀到 LED1、LED2 真的變成 `hi`（通電），之後送 `0` 確認變回 `lo`。整條路徑（LINE 格式 → 外網 → ngrok → Flask → GPIO）跑通。
 - 因為沒有你的 LINE 帳號，**LINE App 實際傳訊息 → 收到機器人回覆**這段（reply token 那部分）沒辦法由我測試，麻煩你在 Console 設定完 Webhook 後自己測一次。
 
 ## 7. 圖形化網頁控制面板（點連結操作，不用打字指令）
@@ -176,7 +178,7 @@ tail -f ~/line_control.log                  # 看即時 log
 
 ### 7.1 怎麼打開
 
-- 網址：`https://hurling-narrow-expend.ngrok-free.dev/panel`
+- 網址：`https://<ngrok-網域>.ngrok-free.dev/panel`
 - 在 LINE 聊天室輸入 `面板`、`panel` 或 `help`，機器人會回傳這個連結，點一下就會用 LINE 內建瀏覽器打開。
 - **加好友當下**（LINE 的 follow 事件）機器人也會自動傳一次歡迎訊息 + 面板連結，不用先打字才拿得到連結。
 
@@ -203,8 +205,11 @@ tail -f ~/line_control.log                  # 看即時 log
 
 跟第 6.5 節一樣，面板**沒有**登入或驗證機制，網址只要有人知道（例如聊天室裡看得到）就能直接打開操作。跟你之前選的「不限制」是一致的。
 
-### 7.5 目前的驗證狀況（樹莓派關機中，還沒能實機測）
+### 7.5 驗證狀況
 
-- 已用 Flask 內建測試工具（不需要真的樹莓派）驗證過：`/panel` 能正常回傳網頁、`/api/led`、`/api/note`、`/api/song`、`/api/relay` 四組 API 在合法/不合法參數下都回傳正確的狀態碼跟 JSON、`follow` 事件會正確觸發歡迎訊息。
-- 已經在瀏覽器實際打開這份網頁（手機尺寸 375×812 + 深色模式）確認排版：首頁卡片、燈泡/蜂鳴器/其他三個子頁面、返回鍵，畫面都正常，符合「選分類 → 出現對應操作按鈕」的需求。
-- **還沒測的**：連到真正的樹莓派 GPIO（因為你把樹莓派關機了）、LINE App 裡實際點連結打開的體驗。檔案還沒上傳到樹莓派 —— 等你開機後跟我說一聲，我上傳、重啟 `line_control.py`，再做一次端對端測試（跟第 6.6 節一樣的驗證方式：打 API、用 `pinctrl` 確認 GPIO 真的有變化）。
+網頁面板與四組 API 早已在實機驗證通過（打 API 後用 `pinctrl get 5` / `pinctrl get 6`
+確認 GPIO 真的有變化），LINE App 內開啟的體驗也測過。
+
+這份文件寫作當下樹莓派 3 是關機狀態，所以原文記錄的是「還沒實機測」；
+之後系統整個搬到樹莓派 4，硬體那條線目前**沒有接線**。
+GPIO 排針規格相容，之後要把 IT Shield 接回樹莓派 4 隨時可以。

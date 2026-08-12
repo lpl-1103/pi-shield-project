@@ -1,0 +1,15 @@
+{
+  "_說明": "複製成 pi3_line_config.json 放在樹莓派的 ~ ，chmod 600。這個檔案在 .gitignore 裡，永遠不要 commit 真的那份。",
+
+  "channel_secret": "<LINE Developers → Messaging API → Channel secret>",
+  "channel_access_token": "<LINE Developers → Messaging API → Channel access token（長期）>",
+
+  "_nlu": "自然語言翻譯層。指向 Mac 上的 openclaw gateway；關掉的話機器人只認得固定指令格式。",
+  "nlu_base_url": "http://YOUR-MAC.local:18789",
+  "nlu_token": "<openclaw gateway token>",
+  "nlu_enabled": true,
+
+  "_stt": "語音轉文字。指向 Mac 上的 mlx-whisper 服務，語音點歌與麥克風語音控制都靠它。",
+  "stt_base_url": "http://YOUR-MAC.local:8770",
+  "stt_enabled": true
+}

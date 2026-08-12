@@ -1,0 +1,26 @@
+# 麥克風語音控制常駐程式。
+#
+# 部署位置：/etc/systemd/system/voice-control.service
+#
+# USB 麥克風的實體開關等同 push-to-talk：關掉開關會切斷 USB 供電，
+# 音訊串流因此結束——voice_control.py 就是把「串流結束」當成「講完了」。
+# 所以這支程式本身有重連迴圈，不需要 Restart=always。
+#
+# 輸出導到 voice.log 而不是 journal，因為辨識過程會印大量診斷資訊
+# （增益、峰值、95 百分位），塞進 journal 會很吵。
+
+[Unit]
+Description=Karaoke Voice Control (wake word optional)
+After=network-online.target line-control.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lpl1103
+WorkingDirectory=/home/lpl1103
+ExecStart=/bin/sh -c "exec /usr/bin/python3 /home/lpl1103/voice_control.py > /home/lpl1103/voice.log 2>&1"
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -13,6 +13,10 @@ projects/pi3-karaoke/**/pi3_line_config.json
 __pycache__/
 *.pyc
 
+# Python 虛擬環境（venv 自己會產生 .venv/.gitignore，但不要依賴那個）
+.venv/
+venv/
+
 # Empty/placeholder files
 code,ipynb
 

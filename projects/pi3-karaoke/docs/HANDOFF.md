@@ -1,8 +1,277 @@
-# 交接文件 — Pi3 Shield 控制專案
+# 交接文件 — 小樂點歌台
+
+**最後更新：2026-08-12。系統運作中，三個 systemd 服務開機自動啟動。**
+
+這份文件分兩部分：
+
+- **第一部分（以下）** 是接手需要知道的現況：架構、部署、維運、疑難排解。想快速上手看這裡。
+- **[第二部分](#第二部分開發歷程依時間順序)** 是按時間順序的第一手開發歷程，記錄每個階段做了什麼、
+  踩過什麼坑、為什麼這樣設計。要理解「為何是這個設計」再往下翻。
+
+---
+
+# 第一部分：現況與維運
+
+## 1. 這是什麼
+
+一台樹莓派 4 當主機的 KTV 點歌系統。使用者從 LINE 傳文字或語音點歌，也可以直接對著
+接在樹莓派上的 USB 麥克風講話。系統用 yt-dlp 從 YouTube 取音訊、mpv 播放、
+從 lrclib.net 抓同步歌詞，另外提供網頁控制台與接電視用的大字歌詞牆。
+
+「聽得懂人話」的部分（口語理解、語音轉文字）跑在一台 Mac 上，樹莓派透過區網 HTTP 呼叫。
+
+## 2. 機器與位址
+
+| 角色 | 機器 | 位址 | 帳號 |
+|---|---|---|---|
+| 主機 | Raspberry Pi 4 Model B (8GB)，Raspberry Pi OS Lite / Debian Trixie 64-bit，Python 3.13.5 | `raspberrypi.local`（服務在 **8000** 埠） | `lpl1103` |
+| AI 後端 | macOS | `<主機名>.local`，openclaw `18789` / LM Studio `1234` / whisper `8770` | — |
+| 週邊 | Raspberry Pi 3 + IT Shield v3.0 | 目前未接線 | — |
+| 對外 | ngrok 固定網域 → 樹莓派 8000 | 見樹莓派上的 unit 檔 | — |
+
+> ⚠ **一律用 mDNS 名稱，不要寫死 IP。** 這個環境的網段換過
+> （`192.168.1.x` → `192.168.0.x`）、Mac 主機名也換過（`mini-2` → `mini-4`），
+> **三次部署失敗都是這個原因**。詳見 §7.1。
+
+## 3. 架構
+
+```
+LINE 使用者 ──文字/語音──> ngrok ──> Pi4:8000 line_control.py (Flask)
+                                          │
+USB 麥克風 ──> voice_control.py ──127.0.0.1──┘
+                                          │
+                       ┌──────────────────┼──────────────────┐
+                       ▼                  ▼                  ▼
+                  karaoke.py         nlu.py (口語)      stt.py (語音)
+                  佇列/播放引擎            │                  │
+                       │                  ▼                  ▼
+              ┌────────┼────────┐   Mac: openclaw     Mac: mlx-whisper
+              ▼        ▼        ▼      → LM Studio      large-v3-turbo
+        radio_pool  song_stats  mpv       qwen3-8b
+        候選池      SQLite     + yt-dlp
+                                 │
+                                 ▼
+                          耳機孔 → 喇叭
+```
+
+**設計上的關鍵決定：所有輸入最後都收斂到同一個 `handle_command()`。**
+語音辨識完的文字、LLM 翻譯完的指令，都是丟回這個函式重跑一次，
+所以新增輸入管道不需要另外寫一套分派邏輯。
+
+Mac 那兩條是**可降級的**：Mac 關機時點歌照常運作，只是聽不懂口語、不能語音點歌。
+
+## 4. 部署與維運
+
+### 日常更新
+
+```bash
+deploy/deploy.sh            # 推送全部並重啟，最後會驗證頁面內容
+deploy/deploy.sh --check    # 只比對 repo 與樹莓派的差異，不推送
+deploy/deploy.sh karaoke    # 只推一支
+```
+
+第一次安裝見 [`deploy/README.md`](../deploy/README.md)。
+
+### 服務
+
+| 服務 | 做什麼 | 日誌 |
+|---|---|---|
+| `line-control.service` | Flask 主程式 | `journalctl -u line-control -f` |
+| `ngrok-tunnel.service` | 對外通道 | `journalctl -u ngrok-tunnel -f` |
+| `voice-control.service` | 麥克風常駐 | `~/voice.log`（**不在 journal**，辨識診斷資訊量大） |
+
+```bash
+sudo systemctl restart line-control
+systemctl status line-control ngrok-tunnel voice-control
+```
+
+`Restart=on-failure` 是刻意的：systemd 把 SIGTERM 當正常結束、SIGKILL 當失敗，
+所以手動 `stop` 不會被拉起來，真的掛掉才會。
+
+### 樹莓派上的檔案
+
+```
+~/line_control.py 等 10 支 .py     程式（跟 repo 的 src/ 應該完全一致）
+~/pi3_line_config.json             密鑰與開關，chmod 600，不進 git
+~/karaoke_stats.sqlite             點歌統計
+~/voice.log                        語音控制日誌
+~/voice_recordings/                最近的錄音（除錯用）
+~/.voice_mic_gain                  麥克風增益，跨重啟保存
+```
+
+### 設定檔
+
+`~/pi3_line_config.json`，範本見 [`deploy/pi3_line_config.example.json`](../deploy/pi3_line_config.example.json)：
+
+| 欄位 | 說明 |
+|---|---|
+| `channel_secret` / `channel_access_token` | LINE Messaging API |
+| `nlu_base_url` / `nlu_token` / `nlu_enabled` | 口語理解，指向 Mac 的 openclaw |
+| `stt_base_url` / `stt_enabled` | 語音轉文字，指向 Mac 的 whisper |
+
+## 5. 驗證系統正常
+
+```bash
+curl -s http://raspberrypi.local:8000/karaoke | grep -c 小樂點歌台      # > 0
+curl -s http://raspberrypi.local:8000/api/karaoke/status | python3 -m json.tool
+```
+
+> ⚠ **只看 HTTP 狀態碼會被騙。** ngrok 網域被別台機器搶走時，公開網址一樣回 200，
+> 內容卻是別的服務。**一定要比對回傳內容。**
+
+## 6. 開發這個專案要注意的事
+
+### 6.1 網頁改動的驗證流程
+
+`line_control.py` 裡的 `KARAOKE_HTML` 是一個很大的 Python 三引號字串，所以：
+
+- **改 CSS/HTML** → 直接對 `.py` 原始碼做字串替換。CSS 裡沒有反斜線，最安全
+- **改 JS** → 注意跳脫。JS 裡 `onclick="priority(\'...\')"` 在 Python 原始碼中必須寫成 `\\'`
+- **絕對不要**「用 `ast` 把字串倒出成 .html 檔，改完再塞回去」——
+  Python 會把 `\'` 解讀成 `'`，**反斜線消失，JS 直接語法錯誤**。
+  非做不可的話，塞回去前要 `NEW.replace('\\', '\\\\')`
+
+驗證要三關：
+
+```bash
+python3 -m py_compile line_control.py                 # 1. Python 語法
+# 2. 用 ast 取出 KARAOKE_HTML 的「執行期字串」再檢查內容
+#    （直接 grep 原始檔會判斷錯跳脫，因為檔案裡是 \\' 而執行期是 \'）
+node --check <抽出來的 script 內容>                     # 3. JS 語法
+```
+
+### 6.2 畫 canvas 圖形要能「看到」
+
+這台機器沒有 PIL、matplotlib、node-canvas。但視覺的東西不可能盲改。
+用假的 canvas context 把路徑錄成 SVG，再用 macOS 內建的 Quick Look 轉 PNG：
+
+```bash
+qlmanage -t -s 900 -o <輸出目錄> <檔案>.svg
+```
+
+完整做法見第二部分「2026-08-12（第六次改版）」那一節。
+
+### 6.3 測試陷阱（踩過兩次）
+
+另開一個 process `import line_control` / `import karaoke` 來測，**那個 process 會有
+自己的一份記憶體狀態**（`_now_playing`、`_queue`），跟真正在跑的服務完全無關。
+一定要組簽章正確的假 LINE webhook 打真的服務，或直接打 HTTP API。
+
+## 7. 疑難排解
+
+### 7.1 SSH 不通 / 部署失敗
+
+`Connection refused`（**不是** timeout）代表那個 IP 上有東西在回應但沒開 SSH
+——通常是**整個網段換了，該 IP 已經被別台機器拿走**。
+
+```bash
+ipconfig getifaddr en0; ipconfig getifaddr en1   # Mac 自己在哪個網段
+ping raspberrypi.local                            # mDNS 解出來的才是對的
+```
+
+不要急著判斷樹莓派故障。曾經誤判成「電源供應不足」，實際上是 Mac 接到了以太網、
+跑到路由器 NAT 的上游網段去。
+
+### 7.2 公開網址打開是別的服務
+
+ngrok 免費方案**一個網域同時只能有一個持有者**。Mac 上的 `local.ngrok` LaunchAgent
+曾兩次在登入時搶走網域。已改名成 `.disabled` 永久停用。
+
+**兩邊都回 HTTP 200，光看狀態碼看不出來**，要比對內容。
+
+### 7.3 有畫面顯示在播，但沒聲音
+
+ALSA 音效卡編號會漂移（重開機後 card 編號改變）。`karaoke.py` 的
+`_detect_headphone_card()` 每次都動態偵測，不要寫死編號。
+
+### 7.4 音量每首歌都跳回去
+
+mpv 的 volume 是 per-instance 的，換一首就重設。所以音量走 `amixer`
+（ALSA 層）而不是 mpv，這樣才跨歌曲保持。
+
+### 7.5 LINE 機器人聽不懂口語
+
+依序檢查：
+
+1. Mac 有沒有開機、`~/.lmstudio/bin/lms server status`
+2. openclaw gateway 有沒有在跑（`18789`）
+3. **`agents.defaults.model.primary` 有沒有指到 lmstudio**
+   ——只改 agent 自己的 `model` 不夠。症狀是 1.5 秒就回 `upstream provider timeout`
+   （那不是慢，是請求被送到早就沒在跑的 ollama）。看 log 裡 `provider=lmstudio` 的次數，
+   是 0 就是這個問題
+4. `nlu_base_url` 的主機名是不是還對（Mac 主機名換過）
+
+### 7.6 語音辨識很慢 / 很怪
+
+- **慢**：qwen3 是 reasoning model，預設會先輸出一大段思考。訊息前面加 `/no_think`
+  可從 27.8 秒降到 2.8 秒。`chat_template_kwargs.enable_thinking` 在這條路徑上沒有作用
+- **辨識出無關的英文**：whisper 沒鎖語言。`LANGUAGE = 'zh'` 已設
+- **辨識出重複亂碼**（`張張張張…`、罐頭句）：那是 whisper 對純噪音的幻覺，
+  `voice_control.py` 的 `looks_hallucinated()` 會過濾掉
+- **麥克風沒收到聲音**：USB 麥克風的 ALSA 增益**每次重新插拔都會歸零**，
+  `configure_mic()` 每次 attach 都會重設
+
+## 8. 已知限制
+
+| 限制 | 說明 |
+|---|---|
+| **光圈「隨音樂震動」不是真的頻譜分析** | 音訊在樹莓派上解碼、從喇叭出來，**瀏覽器拿不到任何音訊取樣**，`AnalyserNode` 沒東西可接。目前是跟著播放狀態走的固定 100 BPM 節拍，光圈與 VU 讀同一個節拍源所以看起來同步。要真反應只能開瀏覽器麥克風收環境音 |
+| **WM8960 Audio HAT 的錄音端不可用** | 峰值恆為 0，三種裝置路徑、兩種取樣率、三個輸入線路都試過。輸出正常，目前只用內建耳機孔 |
+| **USB 麥克風的子音辨識先天吃虧** | 頻譜分析顯示 1000–3400 Hz（中文子音的關鍵頻段）只有 +4.6 dB SNR，母音頻段有 +11.8 dB。這是硬體限制，調參數救不回來 |
+| **`/karaoke` 沒有任何驗證** | 知道 ngrok 網址的人就能控制播放。所以 repo 裡的網域是佔位字串 |
+| **`yt-dlp` 需要定期更新** | YouTube 一改前端就會整個抓不到歌，這是最可能讓系統「突然全壞」的原因 |
+| **Mac 關機會降級** | 口語理解與語音點歌失效，固定格式指令不受影響 |
+
+## 9. 下一步可以做的
+
+- **真正的音訊反應**：`getUserMedia` + Web Audio 收環境音驅動光圈與 VU
+- **`/display` 大螢幕還沒在真電視上驗證過**，只做過字型修正
+- **線描天蠍插畫**（commit `25fc94b`）目前沒有使用。它在操作頁背景太密會糊成一團，
+  但很適合 `/display` 的待機畫面——滿版、沒有 UI 疊在上面、可以給高不透明度
+- **`/karaoke` 加上簡單驗證**，目前是靠網址不外流
+- **Pi3 + IT Shield 接回來**，GPIO 排針規格相容 Pi4
+
+## 10. ⚠ 待處理：ngrok 網域曾寫在公開 repo 的文件裡
+
+2026-08-12 整理時發現，真實的 ngrok 固定網域被寫在 `pi3_control.md` 與這份文件共 18 處。
+**這個 repo 是公開的，而 `/karaoke` 沒有任何驗證——知道網址就能控制播放。**
+
+工作區已經全部改成 `<ngrok-網域>` 佔位字串，但：
+
+> **網域仍然存在於 git 歷史裡**（最早出現在 commit `af90146`），而且早就推上 GitHub。
+> 把檔案改掉**不會**讓已經公開的內容變回私密。
+
+真正的處理方式是**換一個網域**（改檔案沒有用）：
+
+1. ngrok 後台換掉 static domain（免費帳號一次只能有一個）
+2. 改樹莓派上的 `/etc/systemd/system/ngrok-tunnel.service`
+3. `sudo systemctl daemon-reload && sudo systemctl restart ngrok-tunnel`
+4. **LINE Developers Console 的 Webhook URL 要跟著改**，否則機器人會收不到訊息
+5. 已經發給使用者的舊點歌連結會失效
+
+改寫 git 歷史（`filter-repo` + 強制推送）**沒有做**，因為那會讓所有既有 clone 對不上，
+而且網域已經公開過，清歷史也追不回來。要做的話需要另外確認。
+
+
+---
+
+# 第二部分：開發歷程（依時間順序）
+
+以下是開發過程的第一手記錄，由舊到新往下排。**每一節都是當下寫的，沒有事後修改**，
+所以早期章節裡的位址、帳號、狀態描述**都已經過期**——現況一律以第一部分為準。
+
+保留這些不是為了查現況，是為了保留「為什麼當初這樣決定」以及踩過的坑的完整脈絡。
+
+> ⚠ 特別注意：下面第一節（2026-07-16）寫的 SSH 帳號、IP、
+> 「所有服務目前沒有在跑」等資訊**全部已經過期**，不要照著操作。
+
+---
+
+## 交接文件 — Pi3 Shield 控制專案
 
 最後更新：2026-07-16（收工時樹莓派已關機，所有服務目前**沒有**在跑）
 
-## 我們在做什麼
+### 我們在做什麼
 
 把樹莓派上的 ITtraining Pi I/O Shield v3.0（2 顆燈泡 LED1/LED2、1 個蜂鳴器、1 個繼電器）做成可以簡單操作的專案，操作方式從「終端機按鍵」一路擴充到「LINE 聊天室文字指令」再到「LINE 裡點連結打開的圖形化網頁面板」。
 
@@ -10,7 +279,7 @@
 - SSH: `ssh lpl_1103@192.168.1.53`，密碼見私人筆記（公開版不記錄實際密碼）（使用者名稱是 `lpl_1103`，主機名稱是 `LPL`，不要搞混）
 - 硬體：Raspberry Pi 3 Model B，OS 是 Debian Trixie (13) aarch64
 
-## 已經完成什麼
+### 已經完成什麼
 
 1. **[pi3_control.py](../src/pi3_control.py)**（本地 + 已上傳到樹莓派 `~/pi3_control.py`）
    核心 `Pi3Shield` 類別（LED 長亮/閃爍/關、蜂鳴器 PWM 音符+旋律播放、繼電器開關），以及一個獨立可跑的終端機按鍵互動介面（raw tty 模式，仿照樹莓派上原本的 `~/it_shield_led_keyboard.py`）。
@@ -27,8 +296,8 @@
 
 3. **LINE 串接**
    - 使用者提供的 Channel secret / Channel access token 存在樹莓派上的 `~/pi3_line_config.json`（`chmod 600`），**沒有**寫死在程式碼裡，也沒有留在本地 Mac 或提交到任何地方。
-   - 用 ngrok 把樹莓派的 8000 port 曝露到外網，固定網域：`https://hurling-narrow-expend.ngrok-free.dev`。
-   - 使用者已經自己在 LINE Developers Console 把 Webhook URL 設成 `https://hurling-narrow-expend.ngrok-free.dev/callback` 並開啟 Use webhook，Verify 過、實際用手機 LINE 測試過文字指令，確認可用。
+   - 用 ngrok 把樹莓派的 8000 port 曝露到外網，固定網域：`https://<ngrok-網域>.ngrok-free.dev`。
+   - 使用者已經自己在 LINE Developers Console 把 Webhook URL 設成 `https://<ngrok-網域>.ngrok-free.dev/callback` 並開啟 Use webhook，Verify 過、實際用手機 LINE 測試過文字指令，確認可用。
 
 4. **蜂鳴器音調修正**：原本 `NOTE_FREQUENCIES` 用低八度（262~523Hz），實測這顆蜂鳴器在這個範圍幾乎聽不出音高差異（一度懷疑是主動式蜂鳴器，做了 on/off vs 變頻的 A/B 測試排除這個可能）。換成使用者提供的高八度頻率（do=523 re=587 mi=659 fa=698 so=784 la=880 xi=988，Hz）後，使用者實際聽過確認音高變化正常。這個表是三種介面共用的，已經一次修好。
 
@@ -37,7 +306,7 @@
    - 從外網（不是樹莓派本機、也不是區網內）直接打 ngrok 公開網址，送簽章正確的模擬 LINE 訊息，驗證整條路徑：LINE 格式 → 外網 → ngrok → Flask → GPIO。
    - 網頁面板在瀏覽器裡用手機尺寸(375×812) + 深色模式實際點過一輪確認排版。
 
-## 當前卡在哪 / 還沒做完的
+### 當前卡在哪 / 還沒做完的
 
 - **樹莓派已關機，兩個服務目前都沒在跑**（Flask `line_control.py` + ngrok tunnel）。下次要用之前必須手動重啟，見下面「下一步」。
 - **沒有設開機自動啟動**：目前是手動 `nohup ... & disown` 起服務，樹莓派重開機或斷電不會自動恢復。如果要長期穩定用，需要另外設 systemd user service 或 `crontab @reboot`（還沒做）。
@@ -45,7 +314,7 @@
 - **沒有任何存取限制**：LINE 機器人跟網頁面板目前任何加好友/拿到連結的人都能操作硬體。這是使用者明確選擇的（優先求簡單），但要記得這是已知、刻意的決定，不是遺漏。
 - BTN1 / BTN2 實體按鈕讀取沒有實作（一直是刻意先跳過的範圍外項目）。
 
-## 下一步計畫（建議順序）
+### 下一步計畫（建議順序）
 
 1. 開機樹莓派，SSH 進去，照下面「重啟服務」的指令把 `line_control.py` 跟 ngrok 兩個服務啟動起來。
 2. 用手機 LINE 實際點一次面板連結，走一輪所有按鈕，確認跟預期一致。
@@ -53,22 +322,22 @@
 4. 問使用者要不要加存取限制（白名單 LINE userId），如果要，改 `line_control.py` 的 `handle_command` 前面加一段檢查即可。
 5. 其餘功能（BTN1/BTN2 讀取等）看使用者需求再排。
 
-### 重啟服務指令（樹莓派開機、SSH 進去之後）
+#### 重啟服務指令（樹莓派開機、SSH 進去之後）
 
 ```bash
 cd ~
 nohup python3 line_control.py > line_control.log 2>&1 < /dev/null &
 disown
-nohup ngrok http --url=https://hurling-narrow-expend.ngrok-free.dev 8000 --log=stdout > ngrok.log 2>&1 < /dev/null &
+nohup ngrok http --url=https://<ngrok-網域>.ngrok-free.dev 8000 --log=stdout > ngrok.log 2>&1 < /dev/null &
 disown
 sleep 3
-curl -s http://127.0.0.1:4040/api/tunnels   # 確認 tunnel 是 hurling-narrow-expend.ngrok-free.dev
+curl -s http://127.0.0.1:4040/api/tunnels   # 確認 tunnel 是 <ngrok-網域>.ngrok-free.dev
 curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/
 ```
 
 Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域），除非 ngrok 那組帳號的網域又被搶走（見下面的坑）。
 
-## 踩過的坑，絕對不要再踩
+### 踩過的坑，絕對不要再踩
 
 1. **SSH 使用者名稱是 `lpl_1103`，不是 `LPL`**。`LPL` 是主機名稱（shell prompt 顯示 `lpl_1103@LPL`），一開始容易搞混，用 `LPL` 當帳號登入會失敗。
 
@@ -89,7 +358,7 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 
 8. **這台 Mac 的 Bash 工具是操作真實系統**（不是沙盒），`launchctl`、`ifconfig` 等指令都是真的動到使用者本機環境，改動前（尤其是 unload 服務這種）務必先跟使用者確認，不要自己直接動。
 
-## 相關檔案位置
+### 相關檔案位置
 
 本地 Mac（`/Users/lpl/Hardware Development/`）：
 - `pi3_control.py` — 核心硬體邏輯 + 鍵盤介面
@@ -103,17 +372,17 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 - `pi3_line_config.json`（`chmod 600`）— LINE 密鑰，不要外流
 - `it_shield_led_keyboard.py`、`board_led_keyboard.py` — 使用者原本的測試腳本（設計參考來源，沒有動過）
 
-## 有問題找不到方向時
+### 有問題找不到方向時
 
 先看 [pi3_control.md](pi3_control.md) 的操作說明（按鍵/API/LINE設定都寫在那），這份 HANDOFF.md 是給「接手的人/下一次會話」快速搞懂狀態用的，細節操作文件優先看 `pi3_control.md`。
 
 ---
 
-# 2026-07-17 更新：新增樹莓派 4，LINE 機器人搬家 + 點歌系統
+## 2026-07-17 更新：新增樹莓派 4，LINE 機器人搬家 + 點歌系統
 
 ⚠️ **重要**：上面所有內容是昨天（2026-07-16）針對**樹莓派 3**（IT Shield，192.168.1.53）寫的，今天沒有改動那些內容，但架構上已經有變化：**LINE 機器人現在跑在新的樹莓派 4 上，不是樹莓派 3**。樹莓派 3 目前處於「沒在跑 LINE 服務」的閒置狀態（ngrok tunnel 已經移到樹莓派 4）。
 
-## 今天在做什麼
+### 今天在做什麼
 
 使用者拿到一台新的、封裝好機殼的樹莓派 4（原本只知道有兩個顯示器接口跟一個音源孔，不知道詳細規格），請我：
 1. 檢查一張使用者手上的 32G SD 卡有沒有資料，沒有就燒錄新的 Raspberry Pi OS
@@ -121,7 +390,7 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 3. 幫忙查出這台機器實際的硬體規格
 4. 後續追加：LINE 控制播放 YouTube 音樂、把點歌系統做成完整的 KTV 風格前端（排隊、歌詞同步、原聲/伴奏切換）
 
-## 新樹莓派 4 資訊
+### 新樹莓派 4 資訊
 
 - SSH: `ssh lpl1103@192.168.1.111`，密碼見私人筆記（公開版不記錄實際密碼）（**注意帳號是 `lpl1103`，沒有底線 `_`**——跟樹莓派 3 的 `lpl_1103` 不一樣，是因為 Raspberry Pi OS 的 userconf 機制不接受帳號名稱有底線）
 - 型號：**Raspberry Pi 4 Model B Rev 1.4**，8GB 記憶體版本，透過 `/proc/device-tree/model` 確認過，不是用外觀猜的
@@ -129,7 +398,7 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 - 這台 sudo **不是** NOPASSWD（跟樹莓派 3 不同），下指令要用 `ssh -t` 並準備好回應 `[sudo] password for lpl1103:` 提示，密碼同上
 - WiFi：SSID `Golden-IC`，已經設定好開機自動連線（WiFi 密碼跟國碼設定寫在 `/etc/NetworkManager/system-connections/preconfigured.nmconnection`，國碼用 `raspi-config nonint do_wifi_country TW` 設的，密碼見私人筆記）
 
-## 已經完成什麼
+### 已經完成什麼
 
 1. **SD 卡處理**：原本那張 32G 卡裡面是 2021 年的舊 Raspbian Buster（幾乎沒真實資料，只是開機測試過一次），已經確認過、徵得同意後重新燒錄成最新 Raspberry Pi OS Lite (Trixie)。燒錄方式是本地 Mac 下載 `.img.xz` → 解壓縮同時透過 SSH 串流直接 `dd` 進樹莓派 3 讀卡機裡的卡（因為樹莓派 3 自己的系統碟空間只剩 373MB，不夠放，用這個方法完全不佔用樹莓派的硬碟空間）。燒錄完手動掛載開機分割區寫入 `ssh`（開機檔）+ `userconf.txt`（帳號密碼）+ WiFi 設定檔，才把卡片實際插到樹莓派 4 上開機。
 
@@ -139,7 +408,7 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 
 4. **YouTube 音樂播放**（[line_control.py](../src/line_control.py) + [karaoke.py](../src/karaoke.py)）：裝了 `mpv`、`yt-dlp`（升級成 GitHub 最新 standalone 版，蓋掉太舊的 apt 版本）、`deno`（yt-dlp 做 YouTube 簽章解析需要的 JS runtime，沒裝的話很容易解析失敗）。
 
-5. **LINE 機器人搬家到樹莓派 4**：`pi3_line_config.json`（LINE 密鑰）直接用對話裡使用者早先提供的原始值重建到樹莓派 4 上（樹莓派 3 當時已關機拿不到），ngrok 也裝在樹莓派 4 上、用同一組 authtoken + 同一個固定網域 `hurling-narrow-expend.ngrok-free.dev`。**LINE Developers Console 的 Webhook URL 完全沒有變動過**，因為網域沒變，後端悄悄換成樹莓派 4 而已。
+5. **LINE 機器人搬家到樹莓派 4**：`pi3_line_config.json`（LINE 密鑰）直接用對話裡使用者早先提供的原始值重建到樹莓派 4 上（樹莓派 3 當時已關機拿不到），ngrok 也裝在樹莓派 4 上、用同一組 authtoken + 同一個固定網域 `<ngrok-網域>.ngrok-free.dev`。**LINE Developers Console 的 Webhook URL 完全沒有變動過**，因為網域沒變，後端悄悄換成樹莓派 4 而已。
 
 6. **點歌系統（KTV 風格，今天最大的功能）**：
    - **後端**：新檔案 `karaoke.py`，維護一份排隊清單 + 背景執行緒播放迴圈，用 mpv 的 `--input-ipc-server` 開一個 unix socket，即時查詢播放進度（`time-pos`/`duration`），歌詞用 `lrclib.net`（免費公開歌詞資料庫，不用金鑰）搜尋 LRC 逐行時間軸格式並解析。
@@ -151,7 +420,7 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 
 8. **全部端對端測試過**：多人排隊（不同 LINE userId 分別點歌）、伴奏版搜尋（真的搜到「粉刷匠 (伴奏版)」的影片）、切歌、原聲/伴奏即時切換、歌詞同步抓取、mpv IPC 播放進度查詢，都是從外網打真實簽章的 LINE webhook 測試，不是只測程式邏輯。網頁也在瀏覽器實際點過確認排版跟互動（模式切換按鈕的選中樣式等）。
 
-## 當前卡在哪 / 還沒做完的
+### 當前卡在哪 / 還沒做完的
 
 - **樹莓派 3 現在閒置**：ngrok/LINE 服務都搬到樹莓派 4 了，樹莓派 3 上的 `pi3_control.py`/`line_control.py` 還在，但沒有 tunnel 指過去，等於斷線狀態。如果以後要恢復樹莓派 3 的 IT Shield 功能（LED/蜂鳴器/繼電器），要嘛接回樹莓派 4（GPIO 排針相容）要嘛想辦法讓兩台都能對外（ngrok 免費版一次只能一條 tunnel，見昨天的坑）。
 - **樹莓派 4 沒有設開機自動啟動**：跟樹莓派 3 昨天的狀況一樣，`line_control.py`（含 karaoke 播放引擎）+ ngrok 都是手動 `nohup ... & disown` 起的，重開機/斷電不會自動恢復。
@@ -160,7 +429,7 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 - **歌詞不保證找得到**：`lrclib.net` 是社群資料庫，冷門歌或找不到同步歌詞的歌會顯示「沒有找到歌詞」。
 - **一樣沒有存取限制**：跟昨天的決定一致，LINE 上任何人、網頁連結任何人拿到都能操作點歌/排隊。
 
-## 新增的坑，不要再踩
+### 新增的坑，不要再踩
 
 9. **這台 sudo 需要密碼**（樹莓派 3 是 NOPASSWD，這台不是）。用 `ssh host "sudo xxx"` 直接下指令會卡在 `sudo: a terminal is required to read the password`，一定要用 `ssh -t host "sudo xxx"` 並在 expect 腳本裡準備好回應密碼提示（同時處理 SSH 登入密碼跟 sudo 密碼兩個提示，兩個提示文字都含 `password`，用同一個 `expect { "password" { send ... ; exp_continue } eof }` 迴圈就能兩個一起處理，不用分開寫）。
 
@@ -176,7 +445,7 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 
 15. **mpv 的 IPC socket（`--input-ipc-server`）查詢播放位置，歌曲剛開始播放的頭幾秒可能還沒有資料**（`time-pos`/`duration` 回傳 `null` 很正常），不是查詢邏輯有問題，多等幾秒或讓前端輪詢自然補上就好，不用特別處理成錯誤。
 
-## 相關檔案位置（新增）
+### 相關檔案位置（新增）
 
 本地 Mac（`/Users/lpl/Hardware Development/`）：
 - `karaoke.py` — 點歌佇列引擎（今天新增）
@@ -186,13 +455,13 @@ Webhook URL 理論上**不需要**重新去 LINE 後台設定（固定網域）�
 - `pi3_control.py`、`line_control.py`、`karaoke.py`、`pi3_line_config.json`（`chmod 600`）— 跟本地同步
 - `WM8960-Audio-HAT/`（git clone 下來的官方驅動原始碼，裝完可以留著也可以刪，不影響已安裝的驅動）
 
-## 重啟服務指令（樹莓派 4，開機、SSH 進去之後）
+### 重啟服務指令（樹莓派 4，開機、SSH 進去之後）
 
 ```bash
 cd ~
 nohup python3 line_control.py > line_control.log 2>&1 < /dev/null &
 disown
-nohup ngrok http --url=https://hurling-narrow-expend.ngrok-free.dev 8000 --log=stdout > ngrok.log 2>&1 < /dev/null &
+nohup ngrok http --url=https://<ngrok-網域>.ngrok-free.dev 8000 --log=stdout > ngrok.log 2>&1 < /dev/null &
 disown
 sleep 3
 curl -s http://127.0.0.1:4040/api/tunnels
@@ -203,11 +472,11 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 ---
 
-# 2026-07-20 更新：樹莓派 4 設定開機自動啟動
+## 2026-07-20 更新：樹莓派 4 設定開機自動啟動
 
 之前一直是「已知還沒做完的事」清單裡的一項，今天補上了。
 
-## 做了什麼
+### 做了什麼
 
 用 systemd 服務取代手動 `nohup ... & disown`：
 - `/etc/systemd/system/line-control.service` — 跑 `python3 /home/lpl1103/line_control.py`，`User=lpl1103`，`Restart=on-failure`
@@ -217,15 +486,15 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 用 `sudo systemctl enable line-control.service ngrok-tunnel.service` 設成開機啟動。
 
-## 驗證方式
+### 驗證方式
 
 不是只有 `enable` 就相信它會動，是**真的下 `sudo reboot` 重開機一次**，開機後完全沒手動下任何指令，直接檢查：
 - `sudo systemctl is-active line-control.service ngrok-tunnel.service` → 兩個都是 `active`
-- 從外網打 `https://hurling-narrow-expend.ngrok-free.dev/karaoke` 跟 `/manual` → 都是 200
+- 從外網打 `https://<ngrok-網域>.ngrok-free.dev/karaoke` 跟 `/manual` → 都是 200
 
 確認整條路徑（開機 → WiFi 連線 → systemd 啟動 Flask → systemd 啟動 ngrok → 外網打得通）自動化沒問題。
 
-## 以後要注意
+### 以後要注意
 
 - **改 `line_control.py`/`karaoke.py` 之後**，重啟方式從 `pkill + nohup` 改成 `sudo systemctl restart line-control.service`（改動 Flask app 不需要動 ngrok，不用重啟 `ngrok-tunnel.service`）。
 - 要看 log 用 `sudo journalctl -u line-control.service -f`（或 `-u ngrok-tunnel.service`），不再是看 `~/line_control.log` 這個檔案了（systemd 會接管 stdout/stderr 到 journal，`~/line_control.log` 這個舊檔案不會再更新）。
@@ -233,7 +502,7 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 ---
 
-# 專案發布到 GitHub
+## 專案發布到 GitHub
 
 專案已經公開發布：**https://github.com/lpl-1103/pi-shield-project**
 
@@ -243,24 +512,24 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 ---
 
-# ALSA 音效卡編號不穩定，造成「重開機後沒聲音」的 bug 修復
+## ALSA 音效卡編號不穩定，造成「重開機後沒聲音」的 bug 修復
 
-## 問題
+### 問題
 
 今天重啟服務之後，樹莓派 4 完全沒聲音，`mpv` process 有在跑、API 狀態也顯示正常在播放，但實際上聽不到任何聲音。
 
-## 根本原因
+### 根本原因
 
 `karaoke.py` 原本把音效輸出裝置寫死成 `AUDIO_DEVICE = 'alsa/hw:1,0'`（在 2026-07-17 那次修好音效問題時，`hw:1,0` 剛好對應到 Pi 4 內建耳機孔 `bcm2835 Headphones`）。但**這台機器的 ALSA 卡編號在每次開機時不保證固定**——`wm8960soundcard` 跟 `bcm2835 Headphones` 誰是 card 0、誰是 card 1 會隨機互換（實測：某次重開機後互換了一次，再重開一次又換回來）。一旦編號跟寫死的 `hw:1,0` 對不上，程式就會忠實地把音樂播到 WM8960 那片沒接喇叭的板子上，`mpv` 完全正常運作、不會報任何錯誤，只是聲音出到了沒人接收的地方。
 
 **這是個很難靠看 log 抓到的 bug**——因為所有東西（process 存活、API 狀態、mpv 沒有錯誤訊息）看起來都完全正常，只有「人耳朵聽不到」這個症狀。以後遇到「日誌都正常但沒聲音」，第一個該懷疑的就是音效卡編號是不是變了，用 `cat /proc/asound/cards` 立刻能確認。
 
-## 修法
+### 修法
 
 1. 新增 `_detect_headphone_card()`：程式啟動時讀取 `/proc/asound/cards`，用**名稱**（找含有 `"Headphones"` 字樣的那一行）動態判斷正確的卡號，不再寫死數字。`AUDIO_DEVICE` 從固定字串改成根據偵測結果組出來。
 2. 順便發現音量設定也有類似的持久化問題：之前用 `amixer` 調過的音量（-10dB），本來想用 `sudo alsactl store` 存起來，但這台機器上 WM8960 的開機腳本（`wm8960-soundcard.service`）**每次開機都會刪除並重建 `/var/lib/alsa/asound.state`**，把 `alsactl store` 存的東西蓋掉。改成不依賴系統層存檔機制，程式自己在 `karaoke.start()` 時主動下 `amixer` 指令設定音量（`_apply_default_volume()`），每次啟動都自己設一次，不管系統存檔機制有沒有把設定留住都無所謂。
 
-## 驗證方式
+### 驗證方式
 
 改完不是只憑推理相信會動，是**真的重開機測試**：重開機後 `/proc/asound/cards` 顯示編號真的又跟之前不一樣了（card 0/1 對調），確認：
 - 程式自動偵測到新的正確卡號
@@ -269,11 +538,11 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 ---
 
-# LINE 機器人：歌手推薦 + `@` 提及點歌
+## LINE 機器人：歌手推薦 + `@` 提及點歌
 
 使用者想要更貼近日常對話習慣的點歌方式：不知道歌名時能推薦熱門歌曲、可以用「@叫它」的方式點歌，而不是死板地一定要打「點歌」兩個字。這次改動全在 `karaoke.py` + `line_control.py`，走完整的 Plan Mode 流程（先寫計畫檔、使用者核准後才動手）。
 
-## 做了什麼
+### 做了什麼
 
 1. **`karaoke.py` 新增 `search_top_songs(keyword, count=5)`**：用 `yt-dlp --flat-playlist` 搜尋 `"<關鍵字> 熱門歌曲"`，回傳前 N 筆 `{'title', 'id'}`。用 `--flat-playlist` 是因為不需要逐一解析每部影片的播放格式，只要基本資訊，明顯比完整解析快。這不是正式排行榜資料，是 YouTube 搜尋排序，但對主流歌手已經夠準。
 
@@ -284,7 +553,7 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
    - 觸發後回傳搜尋到的前 5 首歌名清單，存進 `_pending_recommendations[user_id]`（含時間戳記）。
    - 使用者接著回一個 1~5 的數字，就直接把對應那首加入排隊，不用再打一次歌名。
 
-## 最大的坑：數字鍵已經被 LED 指令佔用
+### 最大的坑：數字鍵已經被 LED 指令佔用
 
 `handle_command` 裡數字 `1`～`6`、`0` 從很早以前就是控制 LED 燈泡的指令（`1`=燈泡1長亮…）。如果讓「回數字選推薦歌曲」直接搶走這些數字，會整個弄壞既有功能。
 
@@ -292,7 +561,7 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 `6` 跟 `0` 完全不受影響——推薦清單最多給 5 首，這兩個數字永遠是 LED 指令。
 
-## 驗證方式
+### 驗證方式
 
 - 本地：`handle_command('@小樂 稻香', ...)`、尾綴 `0` 伴奏版判斷、`_extract_recommend_keyword()` 對五種觸發語法的判斷、手動塞 `_pending_recommendations` 後確認數字鍵正確攔截且用後即丟（one-shot）、不同 `user_id` 之間不會互相干擾、TTL 過期後數字鍵恢復 LED 行為——全部用假設定檔在本地測過一輪。
 - 意外發現並修掉一個既有小 bug：`karaoke.py` 的 `_resolve_youtube()`／`search_top_songs()` 原本只 catch `subprocess.TimeoutExpired`，沒 catch `yt-dlp` 執行檔本身找不到的 `OSError`（`FileNotFoundError` 是它的子類別）。在樹莓派上不會觸發（yt-dlp 有裝），但這是本地測試時發現的真實健壯性缺口，兩處都補上 `OSError`。
@@ -305,9 +574,9 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 ---
 
-# 網頁點歌頁面：已播歌曲紀錄 + 推薦排除已播過的
+## 網頁點歌頁面：已播歌曲紀錄 + 推薦排除已播過的
 
-## 做了什麼
+### 做了什麼
 
 1. **`karaoke.py` 新增播放歷史紀錄**：模組層級的 `_history` list（上限 30 筆，超過自動丟掉最舊的），在 `_player_loop()` 裡每次歌曲開始播放、標題解析完成後就記一筆（`_record_history()`），內容含標題、YouTube 影片 ID、完整網址、原聲/伴奏模式、點歌人、播放時間戳記。不管是使用者手動點歌還是熱門電台自動播的，都會記錄，因為都走同一個播放迴圈。
    - `get_history(limit=20)`：回傳最近播過的（新到舊排序），給網頁面板用。
@@ -319,7 +588,7 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 4. **`search_top_songs()` 加 `exclude_ids` 參數**：推薦歌手時（`推薦 <歌手>` 指令）現在會傳入 `karaoke.get_played_video_ids()`，過濾掉已經播過的。因為排除後候選可能不夠 5 首，搜尋時刻意多抓一點（`count + len(exclude_ids) + 5` 筆候選）再篩選，確保排除完還是儘量湊滿 5 首。
 
-## 驗證方式
+### 驗證方式
 
 - 本地：手動塞 `_record_history()` 資料，確認 `get_history()` 排序正確（新的在前）、`/api/karaoke/status` 的 `history` 欄位正確帶出、透過 `/api/karaoke/add` 重播歷史紀錄裡的網址能正確加入排隊。
 - 網頁視覺：本地起了個假的 Flask app 匯出 `KARAOKE_HTML`，在瀏覽器裡塞假資料確認「已播歌曲」卡片排版、深色模式、點擊/按鈕互動都正常，主控台沒有 JS 錯誤。
@@ -327,9 +596,9 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 ---
 
-# 2026-07-20：LINE 點歌機器人接上 openclaw + Bionic 本地模型，做自然語言翻譯
+## 2026-07-20：LINE 點歌機器人接上 openclaw + Bionic 本地模型，做自然語言翻譯
 
-## 背景：openclaw 調查的來龍去脈
+### 背景：openclaw 調查的來龍去脈
 
 使用者本機 Mac 上另外裝了一套叫 **openclaw** 的工具（`github.com/openclaw/openclaw`，npm 套件，「多管道 AI Gateway」，本機跑在 port 18789），還有 **Bionic**（LM Studio 的改名版，本機模型下載/推論工具，CLI 在 `~/.lmstudio/bin/lms`）。使用者一開始問的是「怎麼把 openclaw 裡『小龍蝦』的模型換成本地的」，調查後發現：
 
@@ -338,7 +607,7 @@ curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://127.0.0.1:8000/karaoke
 
 問清楚之後，使用者真正要的不是「兩個機器人」，而是：**讓現有這個樹莓派 LINE 點歌機器人聽得懂口語**（不是只認「點歌」「推薦」這些固定前綴），並且明確要求翻譯要透過 **openclaw 接上 Bionic 的本地模型**來做（不要走 Mac 上也有裝的 Ollama）。
 
-## 最終架構
+### 最終架構
 
 ```
 LINE 使用者口語訊息
@@ -355,7 +624,7 @@ LINE 使用者口語訊息
 
 **為什麼是「Pi 呼叫 openclaw、openclaw 再呼叫 Bionic」這個兩層架構，而不是 Pi 直接打 Bionic**：使用者明確要求要用 openclaw 做這個翻譯層（不只是把 Bionic 當一個普通的模型 API 用），這樣以後如果要換模型/加其他自然語言功能，都在 openclaw 這一層調整就好，樹莓派端的程式碼不用再動。
 
-## Mac 端設定變更（不在這個 git repo 裡，記在這裡避免以後忘記）
+### Mac 端設定變更（不在這個 git repo 裡，記在這裡避免以後忘記）
 
 用 `openclaw config patch`（不是手動改 JSON，這個指令會先跑 schema validation，比較不會手滑改壞設定）對 `~/.openclaw/openclaw.json` 做了這些變更：
 
@@ -368,13 +637,13 @@ LINE 使用者口語訊息
 
 ⚠️ **安全考量**（不是隱藏起來的細節，有跟使用者講清楚才做）：`gateway.auth.mode: "token"` 這個模式下，`/v1/chat/completions` 端點文件明講「把這個當成完整的 operator 權限」——樹莓派 `pi3_line_config.json` 裡存的這組 `nlu_token`，理論上可以拿去打 `main`（有完整 coding 工具權限，含檔案讀寫/執行指令），不是只能用在翻譯這個用途上。緩解做法：`karaoke-nlu` 這個 agent 本身設了 `tools.profile: "minimal"` 加 `deny: ["session_status"]`（等於零工具），所以就算被打，這個 agent 本身做不了任何危險的事；但 token 外洩的風險等級要跟 LINE channel secret 一樣看待。
 
-## 樹莓派端新增/修改
+### 樹莓派端新增/修改
 
 - **新增 `nlu.py`**：只匯出一個 `translate(text) -> str | None`，讀 `pi3_line_config.json` 新增的 `nlu_base_url`/`nlu_token`/`nlu_enabled` 三個欄位。任何失敗（連不到、逾時 8 秒、格式不對、模型回「無法辨識」）一律回 `None`。
 - **`line_control.py`**：`handle_command()` 最尾端、原本的「不認識的指令」catch-all 之前，插入 NLU fallback——`translated = nlu.translate(key)`，有翻譯結果就**遞迴呼叫 `handle_command(translated, ...)`**，讓翻譯出來的文字重新走一次前面所有既有規則。這個設計刻意不用 JSON 結構化輸出（本來想過，但因為請求是走 openclaw 的完整 agent run 而不是直接打 model API，中間會經過 agent 的一般對話處理流程，不保證每次都遵守 JSON schema），改成「輸出一行既有指令格式的純文字」更穩，而且完全不用另外寫 dispatch。
 - `pi3_line_config.json` 新增 `nlu_base_url`（`http://lpldeMac-mini-2.local:18789`，用 Mac 的 mDNS 名稱不用寫死 IP，比較不怕路由器重新分配 DHCP）、`nlu_token`、`nlu_enabled: true`。
 
-## 本地模型選擇：中間繞了一圈
+### 本地模型選擇：中間繞了一圈
 
 一開始用 Bionic 已經下載好的 `google/gemma-4-e4b`（4B）測試翻譯品質，結果很不穩（約五到七成準確率，同一句話重跑還會給不同答案，甚至出現過幻覺輸出內部工具路徑 `>MEDIA:file:///__openclaw__/canvas/documents/kpop.mp3` 這種完全編造的東西）。跟使用者確認後，改用 `lms get qwen/qwen3-8b --mlx` 下載了一個更大的模型（4.62GB，MLX 4bit），品質明顯提升到七成左右正確、其餘三成安全地落到「不認識的指令」（不會做錯事，只是沒聽懂）。
 
@@ -384,7 +653,7 @@ LINE 使用者口語訊息
 
 如果之後想繼續提升翻譯品質，方向是：換更大的模型（qwen3-8b 已經是這台 Mac mini M4 16GB 記憶體撐得起的合理上限，再大可能會擠壓其他本機程式的記憶體）、或是研究 openclaw 有沒有「不經過完整 agent run、直接打 provider 原生 API」的呼叫方式（如果有的話應該會比透過 agent run 穩定很多）。
 
-## 驗證方式（都在真實樹莓派 4 上跑過，不是紙上談兵）
+### 驗證方式（都在真實樹莓派 4 上跑過，不是紙上談兵）
 
 - Mac 端：`lms server start --port 1234` 後 `lms ps` 確認模型有載入，`openclaw config patch --dry-run` 先驗證過設定沒問題才真的套用，`openclaw gateway restart` 後本機 `curl localhost:18789/v1/models` 確認 `openclaw/karaoke-nlu` 有出現在清單。
 - 從樹莓派 SSH 出去 `curl http://lpldeMac-mini-2.local:18789/v1/models` 確認區網連得到（mDNS 名稱能正確解析）。
@@ -395,7 +664,7 @@ LINE 使用者口語訊息
   - 手動把 Mac 上的 openclaw gateway 停掉，模擬離線，口語訊息在 8 秒逾時內安全回退成「不認識的指令」，不會卡住或讓 Flask process 掛掉。
 - 測試完把樹莓派上的播放佇列用「停止」指令清空，沒有留下測試垃圾在正式佇列裡。
 
-## 順手修的一個 bug：播放「成功」但沒聲音
+### 順手修的一個 bug：播放「成功」但沒聲音
 
 上面這些都測完之後，使用者實際點歌回報「網頁顯示點播成功、已經在播放階段，但完全沒聲音，然後就直接結束了」。查的時候發現一個程式碼層面的盲點：`_record_history()` 是在 `_resolve_youtube()` 解析成功「之後」、`mpv` 真正啟動「之前」就呼叫的，所以「有出現在已播歌曲清單、網頁顯示正在播放」**不代表 mpv 真的有成功播出聲音**。而且 `_player_loop()` 呼叫 mpv 時用的是 `--really-quiet` + `stdout=DEVNULL, stderr=DEVNULL`，就算 mpv 真的播放失敗，錯誤訊息也是直接丟掉，完全查不到原因。
 
@@ -403,7 +672,7 @@ LINE 使用者口語訊息
 
 這次沒能重現原始的無聲問題，所以沒辦法 100% 確定根本原因，但至少下次再發生的話，`/tmp/mpv_karaoke.log` 會留下 mpv 自己的錯誤訊息，不用再靠猜的。
 
-## 已播歌曲/推薦重複的問題：改成「同一首歌」比對 + 12 小時過期
+### 已播歌曲/推薦重複的問題：改成「同一首歌」比對 + 12 小時過期
 
 使用者接著回報兩個相關的問題：(1) 推薦歌曲沒多久就會重複，(2) 已播歌曲清單想要每 12 小時清一次釋放記憶體。查了一下發現這兩個問題其實是同一個根因：
 
@@ -422,17 +691,17 @@ LINE 使用者口語訊息
 
 ---
 
-# 2026-07-21：修點歌人辨識 bug、大螢幕歌詞頁面、語音點歌
+## 2026-07-21：修點歌人辨識 bug、大螢幕歌詞頁面、語音點歌
 
 使用者一次提了三件事，分開記錄。
 
-## 1. 修 bug：點歌人有時候會被誤判成「匿名」
+### 1. 修 bug：點歌人有時候會被誤判成「匿名」
 
 `get_display_name(user_id)` 原本的邏輯是：查 LINE Get Profile API，不管成功失敗都把結果寫進 `_display_name_cache[user_id]`。問題是「失敗」也會被快取——如果剛好那一次 LINE API 逾時或網路不穩（8 秒逾時不算長），這個使用者就會被永久卡成「匿名」，直到服務重啟為止，之後每次點歌都查不到真名，即使 LINE API 本身早就恢復正常。
 
 改法很單純：**只有成功查到名字才寫入快取**，失敗的話這次先回「匿名」但不快取，下次同一個人點歌會重新試著查一次，不會被一次性的網路問題卡死。
 
-## 2. 大螢幕歌詞頁面（`/display`）
+### 2. 大螢幕歌詞頁面（`/display`）
 
 使用者想要接電視/顯示器當 KTV 大螢幕用，但手邊暫時沒有 HDMI 線，所以這次先把頁面做好、部署上線，等有線材再實際測試投影效果。
 
@@ -447,7 +716,7 @@ LINE 使用者口語訊息
 
 驗證：這個 Browser 環境的沙盒會擋掉樹莓派區網 IP 跟 localhost 的存取（需要另外手動批准），所以沒辦法直接截圖看樹莓派上的實際渲染結果，改成把同一份 HTML/CSS/JS 配上假資料發布成 Artifact 預覽（模擬待機/播放中兩種狀態），視覺上跟部署到樹莓派上的是同一份程式碼，邏輯上沒有差異。實際接上電視後如果比例/字級不順眼，微調對應的 vw 數值即可。
 
-## 3. 語音點歌
+### 3. 語音點歌
 
 使用者想要傳語音訊息也能點歌，不用打字。openclaw 內建的語音轉文字全部是雲端 provider（Deepgram、OpenAI、Google 等等），沒有本地選項，所以另外**獨立於 openclaw** 架了一個本機語音轉文字服務：
 
@@ -459,17 +728,17 @@ LINE 使用者口語訊息
 
 **沒辦法測到的部分**：`_download_line_audio()` 這個下載音檔的函式，因為需要一個真實的 LINE 語音訊息 message id 才能實際呼叫 LINE 的 Content API，沒辦法用假造的 webhook payload 測試（這點跟文字訊息不一樣，文字訊息整個 payload 都可以自己組)。這段程式碼的認證方式完全比照已經驗證過能正常運作的 `get_display_name()`，風險評估上覺得可以接受，但最終還是需要使用者實際傳一則語音訊息來完整驗證這條路徑。
 
-## 這次沒做但先记录下来的：
+### 這次沒做但先记录下来的：
 
 - Whisper server 目前沒有任何身份驗證（純 LAN 內網、不需要密鑰），因為它只是一個「音檔進、文字出」的純函式服務，沒有像 openclaw 那樣可以執行危險操作的疑慮，風險評估上刻意選擇簡化掉這一層。
 
 ---
 
-# 2026-07-21（續）：Mac 服務開機自動啟動 + 樹莓派大螢幕 kiosk 模式
+## 2026-07-21（續）：Mac 服務開機自動啟動 + 樹莓派大螢幕 kiosk 模式
 
 上面提到「Whisper server 需要手動啟動」寫完沒多久，使用者就回報兩件事：(1) 樹莓派裝的是無圖形介面的版本（Raspberry Pi OS **Lite**），接 HDMI 也只會看到文字終端機，`/display` 頁面根本沒有瀏覽器可以顯示；(2) 擔心 Mac 上這些服務（Bionic 伺服器、Whisper server）忘記手動啟動。兩個都處理了。
 
-## Mac 端：Bionic + Whisper server 改成開機自動啟動
+### Mac 端：Bionic + Whisper server 改成開機自動啟動
 
 用 `launchd`（macOS 原生機制，openclaw 自己的 gateway 本來就是這樣裝的，見上面章節的 `ai.openclaw.gateway.plist`），裝了兩個新的 LaunchAgent：
 
@@ -478,7 +747,7 @@ LINE 使用者口語訊息
 
 兩個都用 `launchctl load` 載入並實測過重新啟動有效（先手動關掉舊的手動啟動的 process，改成完全交給 launchd 管）。之後 Mac 重開機、或這兩個 process 意外被殺掉，都會自動再起來，不用再手動記得啟動。
 
-## 樹莓派端：`/display` 大螢幕 kiosk 模式
+### 樹莓派端：`/display` 大螢幕 kiosk 模式
 
 樹莓派裝的是 Raspberry Pi OS **Lite**（一開始整個專案就是刻意選 headless 版本方便 SSH 遠端操作），完全沒有桌面環境，所以就算接了 HDMI，畫面只會停在文字終端機，看不到任何網頁。要讓 `/display` 頁面真的能投影出來，得裝一套最小可用的圖形環境：
 
@@ -492,11 +761,11 @@ LINE 使用者口語訊息
 
 **沒辦法驗證的部分**：這一整套「開機 → 自動登入 → 自動開瀏覽器全螢幕」的流程，需要實際重開機 + 有一台螢幕接在樹莓派上才能親眼確認畫面真的有跑起來——我只能透過 SSH 確認每個檔案/設定都正確就位（套件裝好了、autologin 設定檔存在、`.profile`/`.xinitrc` 內容跟語法都對、`Xwrapper.config` 權限模型相容），但沒辦法遠端看到實際的視覺輸出。使用者拿到 HDMI 線接上電視、重開機一次之後，才是真正的最終驗證。如果畫面沒有如預期出現，`~/.xinitrc` 裡的每一步都可以先手動在樹莓派主控台上一行一行執行来排查是哪個環節卡住。
 
-## 補充：`getty@tty1` 改了設定不會自動生效
+### 補充：`getty@tty1` 改了設定不會自動生效
 
 使用者接了 HDMI 之後回報螢幕還是卡在文字終端機。查了才想到一個明顯但一開始漏想的環節：`raspi-config nonint do_boot_behaviour B2` 只是把 autologin 的設定檔寫下去，**不會讓已經在跑的 `getty@tty1` 服務重新讀取這份設定**——這台樹莓派當時已經開機 23 小時，`getty@tty1` 從那時候就一直用「舊」的（沒有 autologin）方式在跑。不用整台重開機，`sudo systemctl restart getty@tty1.service` 就能讓它用新設定重新啟動這一個服務，完全不影響 `line-control.service`（背後的點歌系統）。之後只要樹莓派本身有重開機過（不管是斷電還是正常重啟），這個問題就不會再出現，因為開機流程本來就會用最新的設定啟動 `getty@tty1`。
 
-## 螢幕接上後發現的兩個真實 bug
+### 螢幕接上後發現的兩個真實 bug
 
 使用者接上 HDMI、`getty@tty1` 重啟生效後，實際看到畫面回報了兩個問題，都修了：
 
@@ -506,13 +775,13 @@ LINE 使用者口語訊息
 
 ---
 
-# 2026-08-10 更新：推薦不重複、常點歌曲資料庫、天氣查詢（風扇未完成）
+## 2026-08-10 更新：推薦不重複、常點歌曲資料庫、天氣查詢（風扇未完成）
 
-## 今天做了什麼
+### 今天做了什麼
 
 搬辦公室之後第一次回來動這個專案。使用者提了四個新功能，完成三個。
 
-## ⚠ 環境變了，先看這個
+### ⚠ 環境變了，先看這個
 
 **樹莓派 4 的 IP 從 `192.168.1.111` 變成 `192.168.0.17`**（搬辦公室，整個網段從
 192.168.1.x 換成 192.168.0.x）。使用者的 Mac 現在是 `192.168.0.95`。
@@ -525,7 +794,7 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 
 ---
 
-## ✅ 1. 熱門電台一次播放期間不重複
+### ✅ 1. 熱門電台一次播放期間不重複
 
 **使用者的需求**：連續播 4 小時（約 60 首）不要重複；停止之後下次開始
 有少部分重複沒關係。
@@ -559,7 +828,7 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 
 ---
 
-## ✅ 2. 常點歌曲資料庫 + 快捷點歌
+### ✅ 2. 常點歌曲資料庫 + 快捷點歌
 
 **新增** [src/song_stats.py](../src/song_stats.py)，SQLite 存在 `~/karaoke_stats.sqlite`。
 
@@ -584,7 +853,7 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 
 ---
 
-## ✅ 3. 天氣查詢
+### ✅ 3. 天氣查詢
 
 **新增** [src/weather.py](../src/weather.py)。地點：新北市三重湯城（25.0616, 121.4790）。
 
@@ -602,7 +871,7 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 
 ---
 
-## ⏸ 4. 博聯小黑豆紅外線控制風扇（未完成，明天繼續）
+### ⏸ 4. 博聯小黑豆紅外線控制風扇（未完成，明天繼續）
 
 **程式已寫好**：[src/ir_remote.py](../src/ir_remote.py)，`python-broadlink 0.19.0`
 已裝在樹莓派上。走**區網直連，不經過博聯雲端**——不需要帳號、不會因對方 API 改版
@@ -633,7 +902,7 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 
 ---
 
-## 相關檔案位置（新增）
+### 相關檔案位置（新增）
 
 | 檔案 | 用途 |
 |---|---|
@@ -645,7 +914,7 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 樹莓派上的部署位置都是 `~/`（跟既有的 `karaoke.py`、`line_control.py` 同一層）。
 原本的 `karaoke.py` 已備份成 `~/karaoke.py.bak-<時間>`。
 
-## ⚠ 還沒做的事
+### ⚠ 還沒做的事
 
 **服務還沒重啟**，所以上面三個新功能**還沒在正式服務上生效**。
 檔案已經傳到樹莓派，但 `line-control.service` 跑的還是舊版程式。
@@ -663,13 +932,13 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 
 ---
 
-# 2026-08-11：三個新功能正式部署完成 + 抓到 ngrok 網域被搶走
+## 2026-08-11：三個新功能正式部署完成 + 抓到 ngrok 網域被搶走
 
 接續上一節。使用者要求「正確部署好，先測試新增的 3 個功能」。結論：**三個功能全部
 驗證通過並已在正式服務上生效**，但過程中發現一個上一節沒注意到、會讓 LINE 機器人
 從外網完全失效的問題。
 
-## 上一節說「服務還沒重啟」，實際上已經生效了
+### 上一節說「服務還沒重啟」，實際上已經生效了
 
 上一節留的待辦是「明天第一件事：`systemctl restart line-control`」。但實測發現
 **不需要**——樹莓派在 12:01 重新開機過（`uptime` 只有 7 分鐘、主程式 PID 902 是開機
@@ -682,12 +951,12 @@ Mac 的公鑰已加進 `~/.ssh/authorized_keys`，現在可以免密碼 SSH。
 `systemctl show -p ActiveEnterTimestamp` 跟檔案 mtime 才準——中間如果有重開機，
 待辦事項可能已經被動完成了。
 
-## ⚠ 真正的問題：ngrok 固定網域被 Mac 搶走，LINE 訊息根本沒送到樹莓派
+### ⚠ 真正的問題：ngrok 固定網域被 Mac 搶走，LINE 訊息根本沒送到樹莓派
 
 `ngrok-tunnel.service` 狀態是 `activating (auto-restart)`、**已經失敗重試 145 次**，
 log 全是坑 #2 / #12 的 `ERR_NGROK_334 endpoint already online`。
 
-但詭異的是外網打 `https://hurling-narrow-expend.ngrok-free.dev/karaoke` 卻回 200——
+但詭異的是外網打 `https://<ngrok-網域>.ngrok-free.dev/karaoke` 卻回 200——
 一開始差點誤判成「還是正常的」。**實際抓內容才發現回來的是 OpenClaw Control 的
 HTML，不是點歌系統的頁面**：
 
@@ -702,7 +971,7 @@ HTML，不是點歌系統的頁面**：
 
 **結果就是：LINE 使用者傳的訊息全部送到 openclaw，樹莓派完全收不到。**
 
-### 修法
+#### 修法
 
 跟使用者確認過後（改動 Mac 上的服務，比照坑 #8 的規矩先問過才動手）：
 
@@ -712,13 +981,13 @@ HTML，不是點歌系統的頁面**：
 `Restart=on-failure` 一直在重試，網域一放開，20 秒內自己就接手了：
 
     ActiveState=active  SubState=running
-    tunnels: ['https://hurling-narrow-expend.ngrok-free.dev']
+    tunnels: ['https://<ngrok-網域>.ngrok-free.dev']
 
 先確認過**樹莓派的 NLU / 語音辨識走的是區網**（`nlu_base_url` 跟 `stt_base_url` 都是
 `lpldeMac-mini-2.local`，不經過這條隧道），所以關掉 Mac 這條不會影響口語理解跟語音
 點歌，才動手的。
 
-### ⚠ 這件事會再發生
+#### ⚠ 這件事會再發生
 
 `local.ngrok.plist` **還留在 `~/Library/LaunchAgents/`**，`launchctl unload` 只在這次
 登入階段有效。**Mac 下次重開機/重新登入，它就會自己回來、再把網域搶走一次。**
@@ -727,21 +996,21 @@ HTML，不是點歌系統的頁面**：
 
 **以後只要「LINE 機器人突然沒反應」，第一個檢查這個**：
 
-    curl -s https://hurling-narrow-expend.ngrok-free.dev/karaoke | head -c 100
+    curl -s https://<ngrok-網域>.ngrok-free.dev/karaoke | head -c 100
 
 回來的是 `🎤 點歌系統` 就正常；是 `OpenClaw Control` 就是又被搶走了。
 **只看 HTTP 狀態碼會被騙**（兩邊都回 200），一定要看內容。
 
-## 三個功能的實測結果
+### 三個功能的實測結果
 
-### ✅ 1. 天氣
+#### ✅ 1. 天氣
 
 樹莓派上直接跑 `weather.report()`，以及走 `handle_command('天氣')`／`('氣溫')` 都正常：
 
     🌤 新北市三重　毛毛雨　目前 27°C（體感 35°C）
     濕度 98%　今日 25~32°C　降雨機率 100%
 
-### ✅ 2. 熱門電台不重複（本次最重要的需求）
+#### ✅ 2. 熱門電台不重複（本次最重要的需求）
 
 在樹莓派上連抓 **70 首**（超過使用者要求的 4 小時 ≈ 60 首）：
 
@@ -759,7 +1028,7 @@ HTML，不是點歌系統的頁面**：
 播出的是「Jackson Wang 王嘉爾 ╳ Mayday Ashin [ Alive ]」——**不在寫死的
 `POPULAR_SONGS` 12 首清單裡**，證明真的是從動態池來的，不是備援清單。
 
-### ✅ 3. 常點歌曲資料庫
+#### ✅ 3. 常點歌曲資料庫
 
 完整跑過一輪「真的播一首 → 進資料庫 → 指令查得到」：
 
@@ -775,7 +1044,7 @@ HTML，不是點歌系統的頁面**：
 在呼叫端 `karaoke._record_history()`**（`record()` 的 docstring 也明講「電台自動播的
 不要呼叫這支」）。以後要驗證這個行為，要測 `_record_history()` 那一層，不是 `record()`。
 
-## 測試留下的東西
+### 測試留下的東西
 
 - 正式的 `~/karaoke_stats.sqlite` 裡有一筆我測試用的紀錄：requester 是 **`部署測試`**、
   歌是周杰倫〈稻香〉。留著不影響功能（之後真實使用的資料會蓋過它），要刪的話：
@@ -785,7 +1054,7 @@ HTML，不是點歌系統的頁面**：
 - 測完已經把電台停掉、佇列清空（`radio_category: None`、`now_playing: None`、`queue: []`），
   沒有留音樂在播。
 
-## 測試小技巧：不搶 GPIO 也能測 handle_command()
+### 測試小技巧：不搶 GPIO 也能測 handle_command()
 
 想在樹莓派上直接測 `handle_command()`，但 `line_control` 一 import 就會去抓 GPIO，
 跟正在跑的服務衝突（會噴 `lgpio.error: GPIO not allocated`）。解法是 import 前先擋掉
@@ -799,7 +1068,7 @@ HTML，不是點歌系統的頁面**：
 
 ---
 
-# 2026-08-11（續）：修好 openclaw + LM Studio 本地模型（LINE bot 的 LLM 能力）
+## 2026-08-11（續）：修好 openclaw + LM Studio 本地模型（LINE bot 的 LLM 能力）
 
 使用者澄清：LINE bot 跟 openclaw 本來就該共存——LINE bot 負責點歌邏輯，openclaw 接
 本地模型（LM Studio 的 qwen3）提供「聽得懂口語」的能力。這個架構七月就建好了
@@ -809,9 +1078,9 @@ HTML，不是點歌系統的頁面**：
 openclaw 還是在 18789 正常跑，樹莓派是走**區網**呼叫它（不經過那條隧道）。
 被停掉的只是 openclaw 的「對外公開隧道」，點歌系統用不到。
 
-## 斷在哪：一共三個獨立的問題疊在一起
+### 斷在哪：一共三個獨立的問題疊在一起
 
-### 1. Mac 的主機名稱變了
+#### 1. Mac 的主機名稱變了
 
 `lpldeMac-mini-2` -> **`lpldeMac-mini-4`**（macOS 在新網路遇到名稱衝突會自動加編號）。
 樹莓派設定檔還指向舊名稱，`curl` 舊名稱回 HTTP 000。
@@ -821,7 +1090,7 @@ openclaw 還是在 18789 正常跑，樹莓派是走**區網**呼叫它（不經
 ⚠ **這個名稱之後還可能再變**（每換一次網路就可能 +1）。以後 NLU 突然失效，
 第一個就查這個：`scutil --get LocalHostName`，然後比對 Pi 設定檔。
 
-### 2. ollama 死了，而 openclaw 的預設模型指向它
+#### 2. ollama 死了，而 openclaw 的預設模型指向它
 
 這是最關鍵、也最難看出來的一個。症狀是打 `openclaw/karaoke-nlu` 一律回
 `upstream provider timeout`，而且**只花 1.5 秒**——快得不像 timeout。
@@ -842,7 +1111,7 @@ openclaw 還是在 18789 正常跑，樹莓派是走**區網**呼叫它（不經
 一定要看 gateway log 的 `[model-fetch] start provider=...` 那行確認實際打去哪，
 不要只看錯誤訊息猜。
 
-### 3. qwen3 是 reasoning 模型，thinking 會拖垮回應時間
+#### 3. qwen3 是 reasoning 模型，thinking 會拖垮回應時間
 
 修好前兩項之後可以動了，但**一次要 27.8 秒**（`reasoning_tokens: 311`）——
 `nlu.py` 的 timeout 只有 8 秒，必定失敗。
@@ -860,7 +1129,7 @@ timeout 太短第一個使用者一定失敗）。也加了 `<think>` 區塊的�
 另外在 openclaw 設了 `models.providers.lmstudio.timeoutSeconds: 300`
 （官方文件就是建議「slow local models」這樣設）。
 
-## 順手補的：讓 NLU 認得今天新增的三個指令
+### 順手補的：讓 NLU 認得今天新增的三個指令
 
 `nlu.py` 的 SYSTEM_PROMPT 原本只列舊指令，所以「今天天氣如何」會被判無法辨識。
 把 `常點` / `熱門排行` / `天氣` 加進合法指令清單跟範例。
@@ -869,7 +1138,7 @@ timeout 太短第一個使用者一定失敗）。也加了 `<think>` 區塊的�
 YouTube 搜尋「常點」這首歌）。在 prompt 裡明確加一條規則才修好：
 「常點/熱門排行/天氣/切歌/停止是完整指令，前面絕對不可以加『點歌』兩個字」。
 
-## 實測結果（都是在樹莓派上跑真的 qwen3）
+### 實測結果（都是在樹莓派上跑真的 qwen3）
 
     '我想聽周杰倫的稻香'  -> '點歌 周杰倫 稻香'  (4.7s)
     '可以跳過這首嗎'      -> '切歌'             (2.1s)
@@ -889,7 +1158,7 @@ YouTube 搜尋「常點」這首歌）。在 prompt 裡明確加一條規則才�
 gateway log 出現 `provider=lmstudio model=qwen/qwen3-8b status=200`，
 樹莓派真的開始播〈溫柔〉。
 
-## ⚠ 重啟服務的替代方法（不用 sudo 密碼）
+### ⚠ 重啟服務的替代方法（不用 sudo 密碼）
 
 這台 sudo 要密碼，照坑 #10 不代替使用者輸入。但 `line-control.service` 是用
 `User=lpl1103` 跑的，所以可以自己送訊號讓 systemd 重啟：
@@ -900,10 +1169,10 @@ gateway log 出現 `provider=lmstudio model=qwen/qwen3-8b status=200`，
 不會重啟，SIGKILL 才算失敗會觸發重啟。送出後約 5~10 秒服務自己回來。
 **動之前先確認沒有音樂在播**（`pgrep mpv`），不然 mpv 會變成孤兒程序。
 
-## 現在的完整架構
+### 現在的完整架構
 
     LINE 使用者口語
-      -> ngrok(hurling-narrow-expend) -> 樹莓派 192.168.0.17:8000
+      -> ngrok(<ngrok-網域>) -> 樹莓派 192.168.0.17:8000
       -> handle_command() 既有規則比對（點歌/切歌/天氣/常點...）
       -> 都比對不到 -> nlu.py -> http://lpldeMac-mini-4.local:18789/v1/chat/completions
                                   (model=openclaw/karaoke-nlu, 前綴 /no_think)
@@ -915,11 +1184,11 @@ gateway log 出現 `provider=lmstudio model=qwen/qwen3-8b status=200`，
 
 ---
 
-# 2026-08-11（續二）：USB 麥克風語音控制（喚醒詞「小P」）
+## 2026-08-11（續二）：USB 麥克風語音控制（喚醒詞「小P」）
 
 使用者要「像智慧音響那樣」用麥克風語音控制點歌系統，喚醒詞定為「小P」。
 
-## 硬體：WM8960 板上的麥克風是壞的，改用 USB 麥克風
+### 硬體：WM8960 板上的麥克風是壞的，改用 USB 麥克風
 
 先試了樹莓派上原有的 WM8960 音效板（`arecord -l` 有列出 capture 裝置），
 **錄到的是精準的振幅 0**——連環境底噪、電路底噪都沒有。測過：
@@ -937,7 +1206,7 @@ gateway log 出現 `provider=lmstudio model=qwen/qwen3-8b status=200`，
   第一版偵測程式用 `\S+` 只抓短名稱去比對 "usb"，結果漏掉它、退回去用沒作用的
   WM8960。**要比對整行**（整行才有 `[USB PnP Sound Device]`）。
 
-### USB 麥克風增益要調，預設是 0
+#### USB 麥克風增益要調，預設是 0
 
 插上去預設 `Mic` 增益是 **0（0%）**，錄到的等於只有殘餘噪音，
 Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
@@ -953,7 +1222,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 ⚠ ALSA 設定重開機不會保留（見前面 WM8960 的坑），之後如果語音突然失效，
 先查 `amixer -c 4 sget Mic` 是不是又變回 0。
 
-## whisper server 加了語言鎖定 + 領域提示
+### whisper server 加了語言鎖定 + 領域提示
 
 `~/.whisper_server/whisper_server.py` 原本沒指定語言，收音稍差就猜成英文吐亂碼。
 加了兩個參數：
@@ -964,7 +1233,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 實測同一段音檔：改之前 `小屁 我想聽到響`，改之後 `小P、我想聽到聲音。`
 （喚醒詞從「小屁」變成正確的「小P」）。
 
-## voice_control.py（新檔，樹莓派 systemd 服務）
+### voice_control.py（新檔，樹莓派 systemd 服務）
 
     arecord 持續錄音 -> 純 Python 算 RMS 做 VAD
     -> 講完一句丟給 Mac 的 whisper -> 轉成文字
@@ -975,7 +1244,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 而且 Python 3.13 已經把 `audioop` 移除了。RMS 用 `struct` + 純 Python 算，
 一次只算 0.1 秒（1600 點），效能綽綽有餘。
 
-### 踩到的三個坑（都已修）
+#### 踩到的三個坑（都已修）
 
 1. **`overrun!!! (at least 23446 ms long)`**
    辨識+執行指令要 20 秒以上，原本在主迴圈裡同步做，那段期間沒人讀 arecord 的輸出，
@@ -996,14 +1265,14 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
    原本 `SILENCE_HOLD_SEC=0.8`，訊噪比差時句中換氣就被判定講完，
    「小P我想聽稻香」只錄到 1.9 秒、歌名被截斷。改成 **1.2 秒**後錄到 4.7 秒，正常。
 
-## line_control.py 新增 /api/voice
+### line_control.py 新增 /api/voice
 
 給語音守護程式用的入口，**只收已經去掉喚醒詞的純指令文字**，
 然後丟進跟 LINE 完全一樣的 `handle_command()`——語音跟打字走同一條路，
 不會有兩套行為。**只允許 127.0.0.1 呼叫**（外部回 403，已實測），
 避免區網上任何人都能對麥克風端點下指令。
 
-## NLU 加了同音字修正
+### NLU 加了同音字修正
 
 語音辨識最大的問題是同音字：稻香 -> 道香/到響/到聲/到像。
 在 `nlu.py` 的 system prompt 加了「使用者的話可能是語音辨識轉來的，
@@ -1013,7 +1282,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 **只講歌名時大約一半機率**（`道香` 有時修正成 `稻香`、有時原樣輸出）。
 → **給使用者的建議：講歌名時盡量帶上歌手名。**
 
-## ⚠ LM Studio 會塞車，不要連發請求
+### ⚠ LM Studio 會塞車，不要連發請求
 
 測試時連續打了 6 個請求，每個樹莓派端 25 秒逾時放棄，
 但 **LM Studio 那邊還在繼續算**，請求一路堆積，狀態卡在 `PROCESSINGPROMPT`，
@@ -1022,7 +1291,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 等它消化完（`lms ps` 回到 `IDLE`）再測，延遲就回到正常的 **3~8 秒**。
 真實使用是一個人偶爾講一句，不會觸發這個問題，但**寫測試腳本時每次之間要留間隔**。
 
-## 現在的服務清單（樹莓派）
+### 現在的服務清單（樹莓派）
 
 | 服務 | 用途 | 開機自啟 |
 |---|---|---|
@@ -1030,13 +1299,13 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 | `ngrok-tunnel` | 對外隧道 | ✅ |
 | `voice-control` | 麥克風語音控制（新增） | ✅ |
 
-## sudo 已改成免密碼（限縮範圍）
+### sudo 已改成免密碼（限縮範圍）
 
 使用者自己執行了設定，`/etc/sudoers.d/lpl1103-nopasswd` 只開放
 `systemctl` / `apt-get` / `apt` 三個指令，不是全開。
 所以現在可以直接 `sudo -n systemctl restart xxx`，不用再請使用者代跑。
 
-## 重新設計：麥克風實體開關 = 說話按鈕（取代 VAD）
+### 重新設計：麥克風實體開關 = 說話按鈕（取代 VAD）
 
 原本用音量偵測（VAD）猜使用者什麼時候講完，問題一堆：換氣被誤判成講完、
 歌名被切掉、喇叭的音樂會誤觸發、噪音尖峰觸發後 whisper 吐幻覺。
@@ -1056,7 +1325,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 實測流程完全正常：`🎤 麥克風已開啟` -> 錄 4.4 秒 -> `🔇 麥克風已關閉` ->
 轉文字 -> 剝喚醒詞 -> 執行。
 
-## 麥克風的自動化處理（都是實測踩出來的）
+### 麥克風的自動化處理（都是實測踩出來的）
 
 1. **USB 重新列舉會把增益歸零**：用實體開關關掉再打開，ALSA 設定全部重設，
    增益變 0 = 收不到聲音。所以每次偵測到裝置都要重設增益，不能只設一次。
@@ -1068,7 +1337,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 4. **錄音會保存**在 `~/voice_recordings/`（留最近 10 段），
    這樣調辨識參數時可以拿真實音檔反覆測試，不用每次都麻煩使用者重講。
 
-## ⚠ 目前的瓶頸：這支 USB 麥克風訊噪比太差
+### ⚠ 目前的瓶頸：這支 USB 麥克風訊噪比太差
 
 分析實際錄音（`~/voice_recordings/*.wav`）發現：
 
@@ -1093,7 +1362,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 2. 如果還是不行，換一支收音品質好一點的麥克風（這支 C-Media/PCM2902 是最便宜那種）
 3. whisper 參數已經確認不是瓶頸，不用再花時間調
 
-## 結論：軟體都做完了，瓶頸是這支麥克風的收音品質
+### 結論：軟體都做完了，瓶頸是這支麥克風的收音品質
 
 同一句「我想聽稻香」，六次嘗試被辨識成六種不同結果：
 
@@ -1115,25 +1384,25 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
 人聲錄起來的高音量段大約 4000~6000，**動態範圍只有 6~7dB**。
 語音辨識大致需要 15~20dB 才穩。
 
-### 已知可用的替代方案
+#### 已知可用的替代方案
 
 **LINE 語音訊息那條路是好的**——用手機麥克風收音，品質好很多，
 走的是同一套 `stt.py` -> whisper -> `handle_command()`。
 在換麥克風之前，語音點歌建議走 LINE 傳語音訊息。
 
-### 如果之後要換麥克風
+#### 如果之後要換麥克風
 
 軟體端完全不用改，`detect_capture_device()` 會自動抓新裝置、
 `configure_mic()` 會自動設增益。插上去重啟 `voice-control` 就好。
 
-## NLU 逾時調整
+### NLU 逾時調整
 
 實測同一句話跑 4 次，有 1 次會超過 25 秒（LM Studio 提示詞快取沒命中時要
 重新處理整段長提示詞）。使用者會看到「不認識的指令」，但其實只是還沒算完。
 `nlu.py` 的 `_TIMEOUT` 從 25 秒改成 **45 秒**——語音流程本來就是關麥克風後等結果，
 寧可多等也不要白白失敗。
 
-## 麥克風語音控制實測成功
+### 麥克風語音控制實測成功
 
 實際成功的那一次：
 
@@ -1152,7 +1421,7 @@ Whisper 會吐出 `Every remark remark remark` 這種英文亂碼。
    正確關鍵字，YouTube 搜尋「周杰倫 導向」照樣命中正確的〈稻香〉。
    **這是這支麥克風的實用解法**：子音辨識先天弱，歌手名等於多一層保險。
 
-## ⚠ 網路排錯：先確認自己在哪個網段
+### ⚠ 網路排錯：先確認自己在哪個網段
 
 有一次「樹莓派連不到、掃整個 192.168.0.x 都空的」，一度以為是樹莓派電源不穩
 反覆重開機。**實際上是 Mac 自己跑到別的網段去了**：
@@ -1169,7 +1438,7 @@ Mac 在 ASUS 路由器**前面**，中間隔著 NAT，所以連不進去。
 **教訓**：連不到裝置時，先確認自己這端的網段/閘道，不要一開始就懷疑對方的
 電源或硬體——我當時已經寫了一整段「可能是供電不足導致反覆重開機」的錯誤推論。
 
-## ngrok 網域衝突：永久解決
+### ngrok 網域衝突：永久解決
 
 Mac 的 `~/Library/LaunchAgents/local.ngrok.plist` 有 `RunAtLoad` + `KeepAlive`，
 **每次 Mac 重新登入就會自己回來**，把免費 ngrok 帳號那個唯一的固定網域搶走
@@ -1189,12 +1458,12 @@ openclaw 仍在 18789 正常運作，樹莓派連過去也是 200。兩邊都好
 
 ---
 
-# 2026-08-11（續三）：暫停功能 + 介面響應式改版
+## 2026-08-11（續三）：暫停功能 + 介面響應式改版
 
 使用者提了三件事：介面要有暫停、單欄版面在電腦上看不舒服但手機上還行（要兩者共存）、
 整體再精緻一些。
 
-## 1. 暫停 / 繼續
+### 1. 暫停 / 繼續
 
 **用 mpv 的 IPC 設 `pause` 屬性**，不是砍掉重播——所以「繼續」是從原本位置接著播。
 這點跟原聲/伴奏切換不一樣（那個是重新搜尋播放另一個版本，一定從頭開始）。
@@ -1221,7 +1490,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 記憶體狀態**，測試行程看不到服務裡正在播的歌。要測必須走真實 webhook 打到跑著的服務。
 （這個坑之前測點歌時也踩過一次。）
 
-## 2. 響應式版面：同一份 HTML，手機單欄 / 桌機雙欄
+### 2. 響應式版面：同一份 HTML，手機單欄 / 桌機雙欄
 
 **沒有做成兩套頁面**，是同一份 `KARAOKE_HTML` 用 CSS Grid 在 900px 斷點切換，
 所以只有一份要維護：
@@ -1240,7 +1509,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 
 手機版（<900px）的呈現跟改版前完全一樣，使用者原本的習慣不受影響。
 
-## 3. 精緻度
+### 3. 精緻度
 
 - 暫停鍵給實心底色（`.btn.primary`）拉出視覺層級——它是這張卡片最常按的動作；
   暫停中時切成綠色的「▶️ 繼續」，狀態一眼可辨
@@ -1256,9 +1525,9 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 
 ---
 
-# 2026-08-12 網頁介面改版：從淺色玻璃擬態改成霓虹夜場
+## 2026-08-12 網頁介面改版：從淺色玻璃擬態改成霓虹夜場
 
-## 0. 前情：為什麼要整個重做
+### 0. 前情：為什麼要整個重做
 
 前一版是淺紫/粉的玻璃擬態（glassmorphism），走的是「淺色為主、深色為輔」。
 陸續加了顆粒、黑膠溝紋、卡片邊緣打光等背景層，使用者的回饋是
@@ -1269,7 +1538,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 
 所以這次是**換方向而不是再加東西**。
 
-## 1. 這次的決定：只做一套深色，不提供淺色模式
+### 1. 這次的決定：只做一套深色，不提供淺色模式
 
 理由寫在 `KARAOKE_HTML` 的 CSS 開頭註解裡，重點是：
 
@@ -1281,7 +1550,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 **這是刻意取捨，不是漏做**——之後如果有人要加淺色模式，要先想清楚
 淺色底下這套霓虹發光效果要怎麼替換，不能直接把顏色反轉了事。
 
-## 2. 色票
+### 2. 色票
 
     --void:        #06050D   /* 底：帶藍紫的近黑，不是純黑 */
     --panel:       rgba(20,16,42,.66)  /* 煙燻玻璃卡片 */
@@ -1293,7 +1562,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 灰階不用純灰，一律偏藍紫（`--sub: #9C93C4`、`--dimmer: #6B6390`），
 跟主色同一個色系，不會看起來像沒選過顏色。
 
-## 3. 視覺層（由後到前）
+### 3. 視覺層（由後到前）
 
 | 層 | 做法 | 用途 |
 |---|---|---|
@@ -1306,7 +1575,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 從卡片底下透出來。`backdrop-filter` 的 `saturate(150%)` 是關鍵，
 它會把透過去的霓虹色再加濃一次。
 
-## 4. 發光元素
+### 4. 發光元素
 
 - 現正播放卡片：粉色外圈 + `box-shadow` 光暈，是全頁唯一有色描邊的卡片
 - 唱片：`conic-gradient` 做出反光，中心是粉紫漸層並發光
@@ -1315,7 +1584,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 - VU 錶：32 根，漸層由紫→粉→琥珀（下到上），中央比兩側高，模擬頻譜
 - 音量滑桿把手：白色 + 青色雙層光暈
 
-## 5. 效能與無障礙
+### 5. 效能與無障礙
 
 - 動畫只有 4 個：舞台燈飄移、唱片旋轉、播放指示脈動、VU（JS 每 130ms）
   ——刻意不加捲動觸發、不加載入序列，那些會讓頁面顯得「AI 生成感」很重
@@ -1323,7 +1592,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 - `@media (prefers-reduced-motion: reduce)` 把所有動畫關掉
 - 按鈕有 `:focus-visible` 的青色外框
 
-## 6. 保留下來沒動的東西
+### 6. 保留下來沒動的東西
 
 改版是**只換視覺、不動邏輯**，以下全部原樣保留並已驗證仍在：
 
@@ -1334,7 +1603,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 - 5 個響應式斷點（900 / 1320 / 1600 / 1900px）
 - 所有 API 路徑與 DOM id、JS 函式名稱
 
-## 7. ⚠️ 網路又變了：不要再寫死 IP
+### 7. ⚠️ 網路又變了：不要再寫死 IP
 
 這次部署一開始 `ssh 192.168.1.101` 得到 **Connection refused**。
 原因不是樹莓派有問題，是**整個網段從 `192.168.1.x` 換成 `192.168.0.x`**。
@@ -1357,7 +1626,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 先 `ipconfig getifaddr en0/en1` + `ping raspberrypi.local` 確認，
 不要急著判斷樹莓派故障。
 
-## 8. 驗證
+### 8. 驗證
 
 1. `python3 -m py_compile line_control.py`
 2. 用 `ast` 解析出 `KARAOKE_HTML` 的**執行期字串值**，確認 JS 裡的
@@ -1373,14 +1642,14 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 
 ---
 
-# 2026-08-12（同日第二次改版）小樂電台：3D 唱盤 + 滑鼠互動
+## 2026-08-12（同日第二次改版）小樂電台：3D 唱盤 + 滑鼠互動
 
-## 0. 改名
+### 0. 改名
 
 `點歌系統` → **`小樂電台`**，全站統一（網頁 `<title>` 與品牌字、大螢幕頁、
 操作手冊、LINE 選單文字、加好友歡迎詞）。`grep 點歌系統` 應該回傳 0 筆。
 
-## 1. 方向：Y2K 霓虹賽博 × 輕潮簡約，兩者合一
+### 1. 方向：Y2K 霓虹賽博 × 輕潮簡約，兩者合一
 
 使用者給了兩個風格並要求「結合」。實際的合法：
 **A 風格當骨架（氛圍、光暈、賽博感），B 風格當肌理（低飽和、大圓角、乾淨）。**
@@ -1396,7 +1665,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
    `::after` 的漸層描邊界定範圍；清單項目之間用 `inset 0 1px 0 rgba(255,255,255,.045)`
    而不是實線
 
-## 2. 色票（全部低飽和）
+### 2. 色票（全部低飽和）
 
     --ink:   #0B0D14   /* 深炭灰帶藍，不是純黑 */
     --mist:  #7FA8D9   /* 霧藍 */
@@ -1407,7 +1676,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 
 圓角提升到 `--r-lg: 30px` / `--r-md: 20px`，所有元件圓角化（B 風格要求）。
 
-## 3. 3D 唱盤（`.deck`）
+### 3. 3D 唱盤（`.deck`）
 
 純 CSS 3D，沒有用任何 3D 函式庫：
 
@@ -1424,7 +1693,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
   ——**這個動作綁在播放狀態上，不是裝飾**
 - **盤面兩顆 LED**：左＝播放中（薄荷）、右＝有歌（粉紫）
 
-## 4. 滑鼠互動（`initPointer()`）
+### 4. 滑鼠互動（`initPointer()`）
 
 | 效果 | 做法 |
 |---|---|
@@ -1436,7 +1705,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 **觸控要跳過**：`if (e.pointerType === 'touch') return;`——
 手機上 `pointermove` 會在滑動時狂觸發，而且游標光暈在觸控裝置上沒有意義。
 
-## 5. 背景聲波（`initWave()`）
+### 5. 背景聲波（`initWave()`）
 
 `<canvas id="wave">` 疊三條相位不同的正弦波，外層 `filter: blur(16px)`。
 
@@ -1447,20 +1716,20 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 振幅 `amp` 用 `amp += (target - amp) * 0.04` 平滑趨近，
 播放中 target=1、待機 target=0.22，所以**波形會隨播放狀態呼吸**。
 
-## 6. 歌詞：半透浮層
+### 6. 歌詞：半透浮層
 
 `.lyrics-float` 刻意**不是** `.panel`——沒有毛玻璃底、沒有描邊，
 只有一層 `radial-gradient(120% 100% at 50% 0%, rgba(255,255,255,.05), transparent 72%)`。
 目前這句 `.ly.cur` 是全頁最亮的元素，前後一句 `.ly.near` 用中階灰，其餘最暗，
 形成三段式的注意力梯度。
 
-## 7. 保留沒動的東西
+### 7. 保留沒動的東西
 
 改版只換視覺，以下全部原樣並已驗證：中文輸入法 Enter 保護、長網址不撐破版面、
 音量防抖與拖曳保護、暫停樂觀更新、5 個響應式斷點、所有 API 路徑與 DOM id、
 `prefers-reduced-motion`（會關掉極光/唱片/聲波/游標光暈）。
 
-## 8. 驗證
+### 8. 驗證
 
 1. `python3 -m py_compile line_control.py`
 2. 用 `ast` 取出 `KARAOKE_HTML` 的**執行期字串**再檢查 17 項
@@ -1473,14 +1742,14 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 
 ---
 
-# 2026-08-12（第三次改版）小樂點歌台：光圈 + 互動星空 + 真唱盤機
+## 2026-08-12（第三次改版）小樂點歌台：光圈 + 互動星空 + 真唱盤機
 
-## 0. 正名
+### 0. 正名
 
 使用者原本打字打錯，正確名稱是 **`小樂點歌台`**（不是「小樂電台」）。
 全站已統一，`grep '小樂電台\|點歌系統'` 應該回傳 0 筆。
 
-## 1. 使用者退回的三點與對應處理
+### 1. 使用者退回的三點與對應處理
 
 | 退回的點 | 原因 | 這版怎麼做 |
 |---|---|---|
@@ -1488,7 +1757,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 | 「背景又單調了」 | 只有極光 + 模糊聲波，兩者都是大面積柔和色塊，缺少細節與亮點 | 加互動星空（含流星） |
 | 「鼠標互動很敷衍」 | 只有跟隨光暈 + 面板高光，**視覺回饋太弱、沒有「東西被我影響到」的感覺** | 星星有物理反應、可推可炸、連星座線 |
 
-## 2. 光圈（`.halo`）
+### 2. 光圈（`.halo`）
 
 參考使用者提供的圖：唱盤後面一圈發光的環。做法是**兩圈反向旋轉的 conic 漸層 + 一層柔光**：
 
@@ -1505,7 +1774,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 `.deck-stage.live` 時：柔光 `opacity` 從 .5 拉到 1，內圈轉速從 16s 縮到 9s
 ——**光圈會隨播放狀態變亮變快**，不是純裝飾。
 
-## 3. 唱盤機
+### 3. 唱盤機
 
 跟前一版的差別：
 
@@ -1517,7 +1786,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 - **唱片移到左側**（`left: 4%`），右邊留給唱針，跟真機一樣
 - 唱片標籤改用 `conic-gradient` 四色環繞，轉起來會有色相流動
 
-## 4. 互動星空（`initStars()`）
+### 4. 互動星空（`initStars()`）
 
 一張 `#stars` canvas，**每顆星是一個有彈簧的質點**：
 
@@ -1535,7 +1804,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 - **流星**：每 260～780 幀隨機一顆，用 `createLinearGradient` 畫拖尾
 - 星數隨視窗大小 `W*H/7200`，夾在 90～230 之間
 
-## 5. 唱盤傾斜改用 rAF 補間
+### 5. 唱盤傾斜改用 rAF 補間
 
 前一版用 CSS `transition: transform .5s`，游標快速移動時會有**黏滯的追趕感**。
 改成 JS 每幀 `cy += (ty - cy) * 0.075`，並把幅度從 ±7°/±5° 加大到 ±26°/±16°。
@@ -1544,7 +1813,7 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 
 CSS 只負責讀 `--ry`/`--rz`，**沒有 transition**，動畫完全由 rAF 驅動。
 
-## 6. 效能
+### 6. 效能
 
 三個 rAF 迴圈（星空、唱盤傾斜、聲波）+ 一個 140ms 的 VU setInterval。
 - 星空 canvas 用 `dpr` 上限 2，`ctx.setTransform(dpr,0,0,dpr,0,0)` 後以 CSS px 作畫
@@ -1552,12 +1821,12 @@ CSS 只負責讀 `--ry`/`--rz`，**沒有 transition**，動畫完全由 rAF 驅
 - 星座線的 O(n²) 只跑在 `near[]`（上限 26），不是全部星星
 - `prefers-reduced-motion` 會把兩張 canvas 都 `display: none` 並關掉所有動畫
 
-## 7. 保留沒動
+### 7. 保留沒動
 
 中文輸入法 Enter 保護、長網址不撐破版面、音量防抖與拖曳保護、暫停樂觀更新、
 5 個響應式斷點、所有 API 路徑與 DOM id、觸控裝置跳過指標特效。
 
-## 8. 驗證
+### 8. 驗證
 
 `py_compile` → `ast` 取執行期字串跑 23 項檢查（含光圈遮罩、星星彈簧公式、
 點擊炸開、星座連線、流星、rAF 補間、JS 跳脫、div/canvas 標籤平衡）
@@ -1565,9 +1834,9 @@ CSS 只負責讀 `--ry`/`--rz`，**沒有 transition**，動畫完全由 rAF 驅
 
 ---
 
-# 2026-08-12（第四次改版）節拍震動 + 天蠍座 + 星點外推
+## 2026-08-12（第四次改版）節拍震動 + 天蠍座 + 星點外推
 
-## 1. ⚠️ 光圈「隨音樂震動」的真相：這不是頻譜分析
+### 1. ⚠️ 光圈「隨音樂震動」的真相：這不是頻譜分析
 
 使用者要求光圈隨音樂震動。**做不到真的**，原因是架構層面的：
 
@@ -1602,7 +1871,7 @@ CSS 只負責讀 `--ry`/`--rz`，**沒有 transition**，動畫完全由 rAF 驅
 VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`），
 重拍時整排一起竄高：`const env = 0.46 + BEAT.kick * 0.66;`
 
-## 2. 天蠍座（`SCO` / `drawScorpius()`）
+### 2. 天蠍座（`SCO` / `drawScorpius()`）
 
 15 顆星、14 條連線，**座標照真實星圖排**：房宿的螯 → 心宿二（Antares）
 → 彎下去的身體 → 尾巴勾回來，末端是毒針（尾宿五 Shaula）。
@@ -1618,7 +1887,7 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 - 大小 `min(W*0.62, H*0.76)`，固定置中
 - `Math.sin(t * 0.05) * 0.04` 的極慢旋轉 + 游標視差 0.014 → 有懸浮感
 
-## 3. 星點：加亮 + 往周邊分布
+### 3. 星點：加亮 + 往周邊分布
 
 中央要留給天蠍座，所以星點改用**極座標取樣並把半徑往外偏**：
 
@@ -1631,7 +1900,7 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 中央會有一塊明顯的空洞。星數上限 230→280，亮度 `0.25+z*0.5` → `0.40+z*0.55`，
 半徑 `0.5+z*1.5` → `0.65+z*1.85`，發暈的門檻也放寬（`z>0.85` → `z>0.72`）。
 
-## 4. 前景調透（但不能影響閱讀）
+### 4. 前景調透（但不能影響閱讀）
 
 只降底色 alpha、**不動模糊強度**（動模糊會直接傷文字可讀性）：
 
@@ -1641,13 +1910,13 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 
 `saturate` 反而調高，讓透過來的天蠍座與極光顏色更明顯一點，補回降 alpha 的損失。
 
-## 5. `prefers-reduced-motion` 改成保留星空
+### 5. `prefers-reduced-motion` 改成保留星空
 
 前一版是把 `#stars` 整個 `display: none`，等於天蠍座也不見了。
 改成**只畫一幀靜態畫面**（`if (!reduceMotion) requestAnimationFrame(draw);`），
 天蠍座和星點都還在，只是不動。`#wave` 仍然關掉。
 
-## 6. ⚠️ 踩到的坑：把 HTML 從 AST 取出再塞回去，反斜線會被吃掉
+### 6. ⚠️ 踩到的坑：把 HTML 從 AST 取出再塞回去，反斜線會被吃掉
 
 這次為了改動方便，先用 `ast` 把 `KARAOKE_HTML` 的**執行期字串**倒出成 .html 檔，
 改完再塞回 Python 三引號字串。**這樣做會壞掉**：
@@ -1670,9 +1939,9 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 
 ---
 
-# 2026-08-12（第五次改版）面板透明化：`backdrop-filter` 才是天蠍座看不到的元兇
+## 2026-08-12（第五次改版）面板透明化：`backdrop-filter` 才是天蠍座看不到的元兇
 
-## 1. 問題
+### 1. 問題
 
 使用者回報「看不到」，而且一併質疑天蠍座怎麼跟參考圖不一樣。
 **這兩件事是同一個原因**：天蠍座畫出來了，但只有在面板之間的縫隙才看得見。
@@ -1685,7 +1954,7 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 前一次改版我以為「降 `--glass` 的 alpha」就能讓背景透出來——**方向錯了**。
 決定「看不看得到細節」的是模糊半徑，不是底色透明度。
 
-## 2. 做法：面板溶掉，控制元件保留實體感
+### 2. 做法：面板溶掉，控制元件保留實體感
 
     /* 面板刻意「不」用 backdrop-filter */
     .panel {
@@ -1709,13 +1978,13 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 
 按鈕另外加 `text-shadow: none`，避免繼承面板的文字陰影變糊。
 
-## 3. 連帶調整
+### 3. 連帶調整
 
 - `.item + .item` 分隔線 `.045` → `.07`（少了底色後原本的太淡）
 - 天蠍座連線 `0.22` → `0.30`（現在真的會被看到，可以更明確一點）
 - `.lyrics-float` 同樣加 `text-shadow`
 
-## 4. 這次改法：直接改 `line_control.py`，不要再倒出來改
+### 4. 這次改法：直接改 `line_control.py`，不要再倒出來改
 
 上一次把 `KARAOKE_HTML` 用 `ast` 倒成 .html 改完再塞回去，
 結果 Python 把 JS 的 `\'` 吃掉（見前一節）。
@@ -1724,7 +1993,7 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 因為這次動到的都是 CSS，內容裡本來就沒有反斜線，天然避開那個坑。
 以後只要改的是 CSS/HTML 而不是 JS，優先用這個方式。
 
-## 5. 驗證
+### 5. 驗證
 
 `py_compile` → `ast` 取執行期字串檢查（注意：**用正則抓 `.panel {` 區塊會誤中
 `.layout, .col, .panel { min-width: 0; }`**，要用 `index('  .panel {\n')` 定位）
@@ -1733,9 +2002,9 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 
 ---
 
-# 2026-08-12（第六次改版）天蠍改成線描插畫
+## 2026-08-12（第六次改版）天蠍改成線描插畫
 
-## 1. 我一開始就搞錯方向
+### 1. 我一開始就搞錯方向
 
 使用者要的是**星座卡上那隻「畫出來」的蠍子**（線描插畫），
 我做成了**天文星圖**（15 顆星按真實星等連線）。兩者完全是兩回事。
@@ -1746,7 +2015,7 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 座標以「整體寬度約 1」為單位，畫的時候 `ctx.scale(S, S)`，
 **所以線寬要寫成 `1.7 / S`**，否則會被一起放大。
 
-## 2. ⚠️ 沒有繪圖庫也要能「看到」自己畫的東西
+### 2. ⚠️ 沒有繪圖庫也要能「看到」自己畫的東西
 
 這台機器沒有 PIL、沒有 matplotlib、沒有 node-canvas。
 但**線描插畫不可能盲改**——只靠讀 CSS/JS 判斷不出畫出來像不像蠍子。
@@ -1764,7 +2033,7 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 
 檔案在 `scratchpad/{prelude,epilogue,render_all}.js`，改完重跑就能再看一次。
 
-## 3. 四輪修正，每輪都是看了圖才知道問題
+### 3. 四輪修正，每輪都是看了圖才知道問題
 
 | 輪次 | 看到的問題 | 原因與修法 |
 |---|---|---|
@@ -1777,12 +2046,12 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 不然平滑會把短外框吃掉。`sampleOpen()` 重現的是跟 `pSmooth` 完全一樣的
 「中點二次貝茲」曲線，所以取樣結果跟實際描邊路徑一致。
 
-## 4. 繪製順序有意義
+### 4. 繪製順序有意義
 
 腳 → 螯 → 腹部 → 頭胸甲 → **尾巴（最後）**。
 尾巴最後畫，因為蠍子的尾巴本來就是舉在背上的，本來就該蓋過腳和身體。
 
-## 5. 驗證
+### 5. 驗證
 
 `py_compile` → `node --check` 抽出來的 JS → **SVG/PNG 目視確認**
 → 部署後線上確認 `drawScorpion` 在、`drawScorpius` 已無殘留、
@@ -1790,9 +2059,9 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 
 ---
 
-# 2026-08-12（第七次改版）天蠍改回星圖版
+## 2026-08-12（第七次改版）天蠍改回星圖版
 
-## 1. 決定
+### 1. 決定
 
 線描插畫版做完之後改回星圖版（`SCO` / `drawScorpius`）。
 
@@ -1808,7 +2077,7 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 之後如果還想放線描插畫，合理的位置是 `/display` 大螢幕的待機畫面
 （滿版、沒有 UI 疊在上面、可以給到高不透明度），不是這個操作頁的背景。
 
-## 2. 還原方式
+### 2. 還原方式
 
 先確認 `25fc94b` 對 `line_control.py` **只動了蠍子**（用 `git diff --stat`
 加上把蠍子相關的行過濾掉後看剩下什麼），確認乾淨之後直接：
@@ -1820,12 +2089,12 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 那一節記錄的「沒有繪圖庫怎麼用 qlmanage 目視驗證 canvas 圖形」是有用的方法，
 要留著。
 
-## 3. 保留下來的東西
+### 3. 保留下來的東西
 
 節拍源 `BEAT`、光圈震波、VU 同步、星點往周邊分布、面板透明化、
 所有互動與功能邏輯全部不動。這次只換掉中央那個圖形。
 
-## 4. 驗證
+### 4. 驗證
 
 `py_compile` → `ast` 檢查（星圖版回來、**線描版的 `ART`/`drawScorpion`/
 `sampleOpen`/`tubeSides` 全部確認已無殘留**、面板仍無 `backdrop-filter`、
