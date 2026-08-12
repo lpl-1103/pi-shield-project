@@ -1562,3 +1562,108 @@ CSS 只負責讀 `--ry`/`--rz`，**沒有 transition**，動畫完全由 rAF 驅
 `py_compile` → `ast` 取執行期字串跑 23 項檢查（含光圈遮罩、星星彈簧公式、
 點擊炸開、星座連線、流星、rAF 補間、JS 跳脫、div/canvas 標籤平衡）
 → 部署後三頁都 200 且含「小樂點歌台」→ API 正常 → 發布假資料 Artifact。
+
+---
+
+# 2026-08-12（第四次改版）節拍震動 + 天蠍座 + 星點外推
+
+## 1. ⚠️ 光圈「隨音樂震動」的真相：這不是頻譜分析
+
+使用者要求光圈隨音樂震動。**做不到真的**，原因是架構層面的：
+
+    音訊路徑：yt-dlp → mpv → ALSA → 樹莓派耳機孔 → 喇叭
+    網頁路徑：瀏覽器 ← HTTP ← Flask（只有 JSON 狀態）
+
+**瀏覽器從頭到尾沒有拿到任何一個音訊取樣**，`AnalyserNode` 沒有東西可以接。
+
+實作的是 `BEAT` 這個**跟著播放狀態走的固定節拍**（`BPM = 100`）：
+
+    BEAT.kick *= Math.pow(0.015, dt);          /* 每秒衰減到 1.5% */
+    if (vuPlaying) {
+      BEAT.phase += dt * BPM / 60;
+      if (BEAT.phase >= 1) { BEAT.phase -= 1; BEAT.kick = 1; BEAT.pulse = 0; }
+    }
+
+播放才跳、暫停就停。**關鍵是光圈與 VU 錶讀同一個 `BEAT`**，
+所以兩者看起來是同一個節奏——這是讓它「像在跟著音樂」的主因，
+而不是節拍本身有多準。
+
+若之後真的要跟著音樂，唯一可行路徑是**開瀏覽器麥克風用 Web Audio 收環境音**
+（`getUserMedia` + `AnalyserNode`）。需要使用者授權，而且手機要放在喇叭附近。
+這條路沒做，要做要先問過使用者。
+
+光圈吃 `--beat` / `--pulse` 兩個 CSS 變數（由 JS 每幀寫在 `.deck-stage` 上）：
+
+    .halo       { transform: scale(calc(1 + var(--beat) * .055)); }
+    .halo .bloom{ opacity: calc(.42 + var(--beat) * .58); }
+    .halo .shock{ transform: scale(calc(1 + var(--pulse) * .40));
+                  opacity: calc((1 - var(--pulse)) * .6); }   /* 每拍往外擴一圈震波 */
+
+VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`），
+重拍時整排一起竄高：`const env = 0.46 + BEAT.kick * 0.66;`
+
+## 2. 天蠍座（`SCO` / `drawScorpius()`）
+
+15 顆星、14 條連線，**座標照真實星圖排**：房宿的螯 → 心宿二（Antares）
+→ 彎下去的身體 → 尾巴勾回來，末端是毒針（尾宿五 Shaula）。
+
+資料第三欄是**星等**，直接拿來決定點的大小與亮度：
+
+    const r = Math.max(1.1, 3.6 - mag * 0.62);
+    const bright = Math.max(0.24, 1.05 - mag * 0.24);
+
+心宿二是紅超巨星，所以單獨給暖色 `243,176,138`，其餘用藍白 `206,222,255`。
+
+- 畫在 `#stars` canvas 的**最前面**（也就是視覺上的最後面），所以一般星點會蓋在它上面
+- 大小 `min(W*0.62, H*0.76)`，固定置中
+- `Math.sin(t * 0.05) * 0.04` 的極慢旋轉 + 游標視差 0.014 → 有懸浮感
+
+## 3. 星點：加亮 + 往周邊分布
+
+中央要留給天蠍座，所以星點改用**極座標取樣並把半徑往外偏**：
+
+    const ang = Math.random() * 6.283;
+    const rad = 0.34 + 0.70 * Math.pow(Math.random(), 0.5);
+    ox = 0.5 + Math.cos(ang) * rad * 0.62;
+    oy = 0.5 + Math.sin(ang) * rad * 0.68;
+
+`Math.pow(random, 0.5)` 讓半徑分布偏大，加上起始 0.34 的內縮，
+中央會有一塊明顯的空洞。星數上限 230→280，亮度 `0.25+z*0.5` → `0.40+z*0.55`，
+半徑 `0.5+z*1.5` → `0.65+z*1.85`，發暈的門檻也放寬（`z>0.85` → `z>0.72`）。
+
+## 4. 前景調透（但不能影響閱讀）
+
+只降底色 alpha、**不動模糊強度**（動模糊會直接傷文字可讀性）：
+
+    --glass: rgba(255,255,255,.055) → .042
+    backdrop-filter: blur(24px) saturate(140%) → blur(21px) saturate(155%)
+    box-shadow 外陰影 .42 → .34
+
+`saturate` 反而調高，讓透過來的天蠍座與極光顏色更明顯一點，補回降 alpha 的損失。
+
+## 5. `prefers-reduced-motion` 改成保留星空
+
+前一版是把 `#stars` 整個 `display: none`，等於天蠍座也不見了。
+改成**只畫一幀靜態畫面**（`if (!reduceMotion) requestAnimationFrame(draw);`），
+天蠍座和星點都還在，只是不動。`#wave` 仍然關掉。
+
+## 6. ⚠️ 踩到的坑：把 HTML 從 AST 取出再塞回去，反斜線會被吃掉
+
+這次為了改動方便，先用 `ast` 把 `KARAOKE_HTML` 的**執行期字串**倒出成 .html 檔，
+改完再塞回 Python 三引號字串。**這樣做會壞掉**：
+
+- 執行期字串裡是 `onclick="priority(\'`（單反斜線，JS 需要的）
+- 直接寫回 `"""..."""`，Python 會把 `\'` 解讀成 `'`，**反斜線消失**
+- 產出的 JS 變成 `'...priority('' + s.id + '')...'`，語法直接壞掉
+
+正確做法是塞回去之前把反斜線加倍：
+
+    ESC = NEW.replace('\\', '\\\\')
+
+**驗證方式也要跟著升級**（光看有沒有出現字串不夠）：
+
+1. `node --check` 直接對抽出來的 `<script>` 內容做語法檢查
+2. 把組 `onclick` 的那幾行抽出來**在 node 裡真的跑一次**，
+   確認產出的是 `onclick="priority('q9')"` 而不是壞掉的字串
+
+這次就是靠第 1 步之前的字串檢查抓到 FAIL，才發現反斜線被吃掉。

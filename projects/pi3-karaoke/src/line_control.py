@@ -354,7 +354,7 @@ KARAOKE_HTML = """<!DOCTYPE html>
     --sub:   #949AB5;
     --dim:   #626883;
 
-    --glass:    rgba(255,255,255,.055);
+    --glass:    rgba(255,255,255,.042);
     --glass-hi: rgba(255,255,255,.10);
     --hairline: rgba(255,255,255,.07);
 
@@ -455,8 +455,8 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .panel {
     position: relative; border-radius: var(--r-lg); padding: 24px;
     background: var(--glass);
-    backdrop-filter: blur(24px) saturate(140%); -webkit-backdrop-filter: blur(24px) saturate(140%);
-    box-shadow: 0 20px 60px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.055);
+    backdrop-filter: blur(21px) saturate(155%); -webkit-backdrop-filter: blur(21px) saturate(155%);
+    box-shadow: 0 20px 60px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.06);
     margin-bottom: 18px; overflow: hidden;
   }
   .col .panel { margin-bottom: 0; }
@@ -496,7 +496,8 @@ KARAOKE_HTML = """<!DOCTYPE html>
   @media (min-width: 900px) { .deck-stage { min-height: 350px; margin: 0 0 4px; } }
 
   /* --- 光圈：兩圈反向旋轉的霓虹環 + 一層柔光 --- */
-  .halo { position: absolute; width: 268px; height: 268px; pointer-events: none; }
+  .halo { position: absolute; width: 268px; height: 268px; pointer-events: none;
+          transform: scale(calc(1 + var(--beat, 0) * .055)); }
   @media (min-width: 900px) { .halo { width: 340px; height: 340px; } }
   .halo .ring { position: absolute; inset: 0; border-radius: 50%;
     -webkit-mask: radial-gradient(circle, transparent 0 66%, #000 67.5%, #000 70%, transparent 71.5%);
@@ -510,9 +511,13 @@ KARAOKE_HTML = """<!DOCTYPE html>
       transparent 0deg, var(--mint) 60deg, transparent 130deg,
       transparent 250deg, var(--taro) 310deg, transparent 360deg); }
   .halo .bloom { position: absolute; inset: 8%; border-radius: 50%;
-    background: radial-gradient(circle, rgba(168,139,224,.30) 0%, rgba(127,168,217,.10) 46%, transparent 70%);
-    filter: blur(18px); transition: opacity .6s; opacity: .5; }
-  .deck-stage.live .halo .bloom { opacity: 1; }
+    background: radial-gradient(circle, rgba(168,139,224,.32) 0%, rgba(127,168,217,.11) 46%, transparent 70%);
+    filter: blur(18px); opacity: calc(.42 + var(--beat, 0) * .58); }
+  /* 震波：每個重拍從光圈往外擴一圈 */
+  .halo .shock { position: absolute; inset: 0; border-radius: 50%;
+    box-shadow: 0 0 0 1.5px rgba(232,143,200,.55), 0 0 22px rgba(232,143,200,.28);
+    transform: scale(calc(1 + var(--pulse, 1) * .40));
+    opacity: calc((1 - var(--pulse, 1)) * .6); }
   .deck-stage.live .halo .ring.r1 { animation-duration: 9s; }
   @keyframes ring-a { to { transform: rotate(360deg); } }
   @keyframes ring-b { to { transform: rotate(-360deg); } }
@@ -771,7 +776,7 @@ KARAOKE_HTML = """<!DOCTYPE html>
   @media (prefers-reduced-motion: reduce) {
     .aurora, .record.spinning, .on-air.live i, .halo .ring { animation: none; }
     .vu span, .ly, .tonearm { transition: none; }
-    #wave, #stars { display: none; }
+    #wave { display: none; }
   }
 </style>
 </head>
@@ -796,6 +801,7 @@ KARAOKE_HTML = """<!DOCTYPE html>
         <div class="deck-stage" id="deck-stage">
           <div class="halo">
             <div class="bloom"></div>
+            <div class="shock"></div>
             <div class="ring r2"></div>
             <div class="ring r1"></div>
           </div>
@@ -891,6 +897,89 @@ let vuPlaying = false;
 /* 全域指標狀態，星空、唱盤、面板高光共用同一份 */
 const P = {x: -9999, y: -9999, has: false, burst: 0};
 
+/* ================= 節拍源 =================
+   ⚠️ 音訊是在樹莓派上解碼、從喇叭出來的，瀏覽器拿不到那條音訊串流，
+   所以這裡「不可能」做真正的頻譜分析。這是一個跟著播放狀態走的固定節拍：
+   播放中才跳、暫停就停。光圈震波與 VU 錶讀同一個 BEAT，兩者看起來才會同步。
+   若之後真的要跟著音樂，唯一可行的路是開瀏覽器麥克風用 Web Audio 收環境音。 */
+const BEAT = {kick: 0, pulse: 1, phase: 0};
+const BPM = 100;
+
+function initBeat() {
+  const stage = document.getElementById('deck-stage');
+  if (reduceMotion) { setInterval(tickVU, 420); return; }
+  let last = performance.now(), vuAcc = 0;
+  (function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    BEAT.kick *= Math.pow(0.015, dt);              /* 每秒衰減到 1.5% */
+    if (vuPlaying) {
+      BEAT.phase += dt * BPM / 60;
+      if (BEAT.phase >= 1) { BEAT.phase -= 1; BEAT.kick = 1; BEAT.pulse = 0; }
+      BEAT.pulse = Math.min(1, BEAT.pulse + dt * 1.7);
+    } else {
+      BEAT.phase = 0; BEAT.pulse = 1;
+    }
+    stage.style.setProperty('--beat', BEAT.kick.toFixed(3));
+    stage.style.setProperty('--pulse', BEAT.pulse.toFixed(3));
+    vuAcc += dt;
+    if (vuAcc >= 0.09) { vuAcc = 0; tickVU(); }
+    requestAnimationFrame(loop);
+  })(last);
+}
+
+/* ================= 天蠍座 =================
+   座標是照真實星圖排的：房宿的螯 → 心宿二（Antares，紅超巨星）
+   → 一路彎下去的身體 → 尾巴勾回來，末端兩顆是毒針（尾宿五 Shaula）。
+   第三欄是星等，數字越小越亮，直接拿來決定點的大小與亮度。      */
+const SCO = {
+  s: [[0.10,0.07,1.9], [0.20,0.17,2.3], [0.15,0.30,2.9], [0.31,0.27,2.9],
+      [0.37,0.38,1.0], [0.44,0.49,2.8], [0.49,0.61,2.3], [0.54,0.71,3.0],
+      [0.58,0.80,3.6], [0.66,0.88,3.3], [0.76,0.91,1.9], [0.85,0.86,3.0],
+      [0.90,0.78,2.4], [0.87,0.70,2.7], [0.81,0.65,1.6]],
+  l: [[0,1],[1,2],[1,3],[3,4],[4,5],[5,6],[6,7],[7,8],[8,9],[9,10],[10,11],[11,12],[12,13],[13,14]],
+  antares: 4
+};
+
+function drawScorpius(ctx, W, H, t) {
+  const S = Math.min(W * 0.62, H * 0.76);
+  const cx = W / 2 + (P.has ? (P.x - W / 2) * 0.014 : 0);
+  const cy = H / 2 + (P.has ? (P.y - H / 2) * 0.014 : 0);
+  const rot = Math.sin(t * 0.05) * 0.04;          /* 極慢擺動，像懸浮著 */
+  const co = Math.cos(rot), si = Math.sin(rot);
+  const pts = [];
+  for (let i = 0; i < SCO.s.length; i++) {
+    const dx = (SCO.s[i][0] - 0.5) * S, dy = (SCO.s[i][1] - 0.5) * S;
+    pts.push([cx + dx * co - dy * si, cy + dx * si + dy * co]);
+  }
+  /* 連線 */
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(168,139,224,' + (0.22 + BEAT.kick * 0.16).toFixed(3) + ')';
+  ctx.beginPath();
+  for (let i = 0; i < SCO.l.length; i++) {
+    const a = pts[SCO.l[i][0]], b = pts[SCO.l[i][1]];
+    ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  }
+  ctx.stroke();
+  /* 星點 */
+  for (let i = 0; i < pts.length; i++) {
+    const mag = SCO.s[i][2];
+    const bright = Math.max(0.24, 1.05 - mag * 0.24);
+    const tw = 0.72 + 0.28 * Math.sin(t * (0.8 + i * 0.13) + i);
+    const r = Math.max(1.1, 3.6 - mag * 0.62);
+    const tint = i === SCO.antares ? '243,176,138' : '206,222,255';   /* 心宿二偏紅 */
+    const a = Math.min(1, bright * tw * (0.72 + BEAT.kick * 0.3));
+    ctx.beginPath();
+    ctx.arc(pts[i][0], pts[i][1], r * 4.2, 0, 6.283);
+    ctx.fillStyle = 'rgba(' + tint + ',' + (a * 0.10).toFixed(3) + ')';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(pts[i][0], pts[i][1], r, 0, 6.283);
+    ctx.fillStyle = 'rgba(' + tint + ',' + a.toFixed(3) + ')';
+    ctx.fill();
+  }
+}
+
 function selectMode(mode) {
   selectedMode = mode;
   document.getElementById('mode-original').classList.toggle('on', mode === 'original');
@@ -901,7 +990,6 @@ function selectMode(mode) {
    每顆星有原點與速度，用彈簧拉回原點。游標會推開附近的星，
    點擊會炸開一圈。靠近游標的星會變亮變大並跟游標連線。      */
 function initStars() {
-  if (reduceMotion) return;
   const cv = document.getElementById('stars');
   const ctx = cv.getContext('2d');
   const TINT = ['255,255,255', '127,168,217', '168,139,224', '230,143,200', '111,227,196'];
@@ -914,15 +1002,19 @@ function initStars() {
     W = window.innerWidth; H = window.innerHeight;
     cv.width = Math.floor(W * dpr); cv.height = Math.floor(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const n = Math.round(Math.min(230, Math.max(90, W * H / 7200)));
+    const n = Math.round(Math.min(280, Math.max(110, W * H / 6200)));
     stars = [];
     for (let i = 0; i < n; i++) {
       const z = Math.random();                    /* 深度：影響視差與大小 */
-      const ox = Math.random(), oy = Math.random();
+      /* 極座標取樣並把半徑往外偏：中央留給天蠍座，星點集中在周邊 */
+      const ang = Math.random() * 6.283;
+      const rad = 0.34 + 0.70 * Math.pow(Math.random(), 0.5);
+      const ox = Math.min(0.995, Math.max(0.005, 0.5 + Math.cos(ang) * rad * 0.62));
+      const oy = Math.min(0.995, Math.max(0.005, 0.5 + Math.sin(ang) * rad * 0.68));
       stars.push({
         ox: ox, oy: oy, x: ox * W, y: oy * H, vx: 0, vy: 0, z: z,
-        r: 0.5 + z * 1.5,
-        a: 0.25 + z * 0.5,
+        r: 0.65 + z * 1.85,
+        a: 0.40 + z * 0.55,
         tint: TINT[WEIGHT[(Math.random() * WEIGHT.length) | 0]],
         tp: Math.random() * 6.283,
         ts: 0.6 + Math.random() * 1.6
@@ -934,6 +1026,7 @@ function initStars() {
 
   function draw() {
     ctx.clearRect(0, 0, W, H);
+    drawScorpius(ctx, W, H, t);      /* 先畫，所以天蠍座在一般星點後面 */
     const parX = P.has ? (P.x - W / 2) * 0.022 : 0;
     const parY = P.has ? (P.y - H / 2) * 0.022 : 0;
     const near = [];
@@ -957,17 +1050,17 @@ function initStars() {
       s.vx *= 0.90; s.vy *= 0.90;
       s.x += s.vx; s.y += s.vy;
 
-      const tw = 0.55 + 0.45 * Math.sin(t * s.ts + s.tp);
-      const a = Math.min(1, s.a * tw + glow * 0.85);
+      const tw = 0.62 + 0.38 * Math.sin(t * s.ts + s.tp);
+      const a = Math.min(1, s.a * tw + glow * 0.85 + BEAT.kick * 0.14);
       const r = s.r * (1 + glow * 1.9);
       ctx.beginPath();
       ctx.arc(s.x, s.y, r, 0, 6.283);
       ctx.fillStyle = 'rgba(' + s.tint + ',' + a.toFixed(3) + ')';
       ctx.fill();
-      if (glow > 0.45 || (s.z > 0.85 && tw > 0.9)) {       /* 亮星加一圈暈 */
+      if (glow > 0.4 || (s.z > 0.72 && tw > 0.82)) {       /* 亮星加一圈暈 */
         ctx.beginPath();
-        ctx.arc(s.x, s.y, r * 3.4, 0, 6.283);
-        ctx.fillStyle = 'rgba(' + s.tint + ',' + (a * 0.11).toFixed(3) + ')';
+        ctx.arc(s.x, s.y, r * 3.8, 0, 6.283);
+        ctx.fillStyle = 'rgba(' + s.tint + ',' + (a * 0.15).toFixed(3) + ')';
         ctx.fill();
       }
     }
@@ -1007,7 +1100,7 @@ function initStars() {
 
     P.burst *= 0.88;
     t += 0.016;
-    requestAnimationFrame(draw);
+    if (!reduceMotion) requestAnimationFrame(draw);
   }
   draw();
 }
@@ -1127,16 +1220,17 @@ function initVU() {
   let html = '';
   for (let i = 0; i < VU_BARS; i++) html += '<span></span>';
   document.getElementById('vu').innerHTML = html;
-  setInterval(tickVU, 140);
 }
 function tickVU() {
   const vu = document.getElementById('vu');
   const bars = vu.children;
+  /* 重拍時整排一起竄高，所以 VU 跟光圈看起來是同一個節奏 */
+  const env = 0.46 + BEAT.kick * 0.66;
   for (let i = 0; i < bars.length; i++) {
     let hh = 8;
     if (vuPlaying) {
       const centre = 1 - Math.abs(i - (VU_BARS - 1) / 2) / ((VU_BARS - 1) / 2);
-      hh = 12 + Math.random() * 78 * (0.28 + centre * 0.72);
+      hh = 10 + Math.min(86, Math.random() * 92 * (0.28 + centre * 0.72) * env);
     }
     bars[i].style.height = hh.toFixed(0) + '%';
   }
@@ -1357,11 +1451,12 @@ function setMode(mode) {
   }).then(poll);
 }
 
+initVU();
+initBeat();
 initStars();
 initPointer();
 initWave();
 initInput();
-initVU();
 poll();
 setInterval(poll, 1500);
 </script>
