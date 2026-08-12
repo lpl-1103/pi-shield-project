@@ -332,226 +332,372 @@ KARAOKE_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 <title>🎤 點歌系統</title>
 <style>
+  /* ================================================================
+     刻意只做一套深色霓虹視覺，不提供淺色模式。
+     理由：這是 KTV 點歌系統，使用場景就是昏暗的房間 + 音樂。
+     做成「淺色為主、深色為輔」會兩邊都不到位；
+     直接把整個介面當成一個霓虹夜場來設計，才有記憶點。
+     ================================================================ */
   :root {
-    color-scheme: light dark;
-    --bg-a: #eef0ff;
-    --bg-b: #fbe8f5;
-    --bg-c: #e6f4ff;
-    --card: rgba(255,255,255,.68);
-    --card-solid: #ffffff;
-    --card-border: rgba(255,255,255,.6);
-    --text: #1c1a2b;
-    --sub: #726f8c;
-    --shadow: 0 10px 30px rgba(90,70,150,.12);
-    --brand: linear-gradient(135deg, #7c6ff5, #ff6fa0);
-    --brand2: linear-gradient(135deg, #06b6d4, #22c55e);
-    --danger: #ff3b30;
-    --track: rgba(120,110,160,.18);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg-a: #120e22; --bg-b: #1c1030; --bg-c: #0d1b2b;
-      --card: rgba(30,26,48,.58); --card-solid: #241f3b; --card-border: rgba(255,255,255,.08);
-      --text: #f3f1ff; --sub: #a79fc9;
-      --shadow: 0 10px 30px rgba(0,0,0,.45);
-      --track: rgba(255,255,255,.12);
-    }
+    color-scheme: dark;
+    --void:   #06050D;
+    --void-2: #0C0A1A;
+    --panel:  rgba(20, 16, 42, .66);
+    --panel-solid: #14102A;
+    --edge:   rgba(255, 255, 255, .08);
+    --edge-hot: rgba(255, 46, 147, .35);
+
+    --neon-pink: #FF2E93;
+    --neon-cyan: #00E5FF;
+    --neon-violet: #B14BFF;
+    --neon-amber: #FFB020;
+
+    --text:  #F2ECFF;
+    --sub:   #9C93C4;
+    --dimmer:#6B6390;
+
+    --grad-hot:  linear-gradient(135deg, #FF2E93, #B14BFF);
+    --grad-cool: linear-gradient(135deg, #00E5FF, #B14BFF);
+    --danger: #FF4D6A;
+    --track: rgba(255,255,255,.10);
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html { scrollbar-width: none; }
+  html::-webkit-scrollbar { display: none; }
+
   body {
-    margin: 0;
-    min-height: 100vh;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    margin: 0; min-height: 100vh; position: relative; overflow-x: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+                 "PingFang TC", "Microsoft JhengHei", sans-serif;
     color: var(--text);
-    padding: 22px 16px 60px;
-    background:
-      radial-gradient(circle at 12% 8%, var(--bg-b) 0%, transparent 45%),
-      radial-gradient(circle at 90% 15%, var(--bg-c) 0%, transparent 40%),
-      radial-gradient(circle at 50% 100%, var(--bg-b) 0%, transparent 50%),
-      var(--bg-a);
-    background-attachment: fixed;
+    padding: 22px 16px 64px;
+    background: var(--void);
   }
-  /* 手機維持單欄（原本的體驗不變）；桌機自動變兩欄，
-     左邊放「正在播 + 歌詞」這種要一直盯著的，右邊放操作類的。
-     用 grid + max-width 切換，不是兩套版面，所以只有一份 HTML 要維護。 */
-  .wrap { max-width: 480px; margin: 0 auto; }
+
+  /* --- 舞台燈：兩顆巨大的霓虹光暈，緩慢飄移 --- */
+  .stage-light {
+    position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
+    filter: blur(90px); opacity: .55;
+    will-change: transform;
+  }
+  .sl-1 {
+    width: 60vw; height: 60vw; max-width: 720px; max-height: 720px;
+    top: -18vw; right: -12vw;
+    background: radial-gradient(circle, var(--neon-pink) 0%, transparent 68%);
+    animation: drift1 22s ease-in-out infinite alternate;
+  }
+  .sl-2 {
+    width: 52vw; height: 52vw; max-width: 640px; max-height: 640px;
+    bottom: -16vw; left: -14vw;
+    background: radial-gradient(circle, var(--neon-cyan) 0%, transparent 68%);
+    animation: drift2 27s ease-in-out infinite alternate;
+    opacity: .38;
+  }
+  @keyframes drift1 { to { transform: translate3d(-7vw, 6vh, 0) scale(1.12); } }
+  @keyframes drift2 { to { transform: translate3d(6vw, -5vh, 0) scale(1.08); } }
+
+  /* --- 黑膠溝紋 + 顆粒：材質層 --- */
+  .grain {
+    position: fixed; inset: 0; pointer-events: none; z-index: 1; opacity: .06;
+    mix-blend-mode: screen;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .grooves {
+    position: fixed; inset: 0; pointer-events: none; z-index: 1;
+    background: repeating-radial-gradient(circle at 88% 8%,
+      transparent 0 23px, rgba(255,255,255,.045) 23px 24px);
+    -webkit-mask-image: radial-gradient(circle at 88% 8%, #000 0%, transparent 58%);
+    mask-image: radial-gradient(circle at 88% 8%, #000 0%, transparent 58%);
+  }
+
+  .wrap { position: relative; z-index: 2; max-width: 480px; margin: 0 auto; }
   .layout { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+  .layout, .col, .card { min-width: 0; }
+
   @media (min-width: 900px) {
-    body { padding: 32px 28px 60px; }
-    .wrap { max-width: 1180px; }
-    .layout { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 22px; }
-    .col { display: grid; gap: 18px; align-content: start; }
-    .col-left { position: sticky; top: 24px; }
+    body { padding: 34px 30px 64px; }
+    .wrap { max-width: 1220px; }
+    .layout { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 24px; }
+    .col { display: grid; gap: 20px; align-content: start; }
+    .col-left { position: sticky; top: 26px; }
   }
   @media (min-width: 1320px) {
-    .layout { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 26px; }
+    body { padding: 38px 40px 64px; }
+    .wrap { max-width: 1380px; }
+    .layout { grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr); gap: 30px; }
   }
-  .topbar { text-align: center; margin-bottom: 22px; }
+  @media (min-width: 1600px) { body { padding: 42px 52px 68px; } .wrap { max-width: 1560px; } }
+  @media (min-width: 1900px) { .wrap { max-width: 1740px; } }
+
+  /* --- 標題 --- */
+  .topbar { margin-bottom: 24px; text-align: center; }
   .topbar .kicker {
-    font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
-    color: var(--sub); font-weight: 700;
+    font-size: 10.5px; letter-spacing: .34em; text-transform: uppercase;
+    color: var(--neon-cyan); font-weight: 700;
+    text-shadow: 0 0 12px rgba(0,229,255,.6);
   }
   .topbar h1 {
-    font-size: 24px; margin: 4px 0 0; font-weight: 800; letter-spacing: -.01em;
-    background: var(--brand);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
+    font-size: 27px; margin: 8px 0 0; font-weight: 900; letter-spacing: -.02em;
+    color: #fff;
+    text-shadow: 0 0 18px rgba(255,46,147,.55), 0 0 46px rgba(177,75,255,.35);
   }
   @media (min-width: 900px) {
-    .topbar { text-align: left; margin-bottom: 26px; }
-    .topbar h1 { font-size: 30px; }
+    .topbar { text-align: left; margin-bottom: 28px; }
+    .topbar h1 { font-size: 36px; }
   }
+
+  /* --- 卡片：煙燻玻璃 --- */
   .card {
-    background: var(--card);
-    backdrop-filter: blur(22px) saturate(160%);
-    -webkit-backdrop-filter: blur(22px) saturate(160%);
-    border: 1px solid var(--card-border);
-    border-radius: 24px;
+    background: var(--panel);
+    backdrop-filter: blur(26px) saturate(150%);
+    -webkit-backdrop-filter: blur(26px) saturate(150%);
+    border: 1px solid var(--edge);
+    border-radius: 22px;
     padding: 20px;
     margin-bottom: 16px;
-    box-shadow: var(--shadow);
+    position: relative;
+    box-shadow: 0 18px 44px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.07);
+  }
+  .col .card { margin-bottom: 0; }
+
+  /* 主角卡片：外圈跑一圈霓虹描邊 */
+  #now-playing-card {
+    border-color: var(--edge-hot);
+    box-shadow: 0 20px 60px rgba(255,46,147,.16),
+                0 0 0 1px rgba(255,46,147,.12),
+                inset 0 1px 0 rgba(255,255,255,.09);
+  }
+
+  .section-title {
+    font-size: 10.5px; color: var(--sub); font-weight: 800; margin-bottom: 14px;
+    text-transform: uppercase; letter-spacing: .22em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .count-pill {
+    margin-left: auto; font-size: 10.5px; font-weight: 800; letter-spacing: 0;
+    background: rgba(255,46,147,.16); color: #FF7FBB;
+    padding: 3px 9px; border-radius: 999px;
   }
   .dim { color: var(--sub); font-weight: 400; }
-  .section-title {
-    font-size: 12px; color: var(--sub); font-weight: 800; margin-bottom: 12px;
-    text-transform: uppercase; letter-spacing: .1em;
-    display: flex; align-items: center; gap: 6px;
-  }
 
-  /* ---- Now playing ---- */
-  .np-head { display: flex; align-items: center; gap: 14px; }
+  /* --- 現正播放 --- */
+  .np-head { display: flex; align-items: center; gap: 16px; }
   .vinyl {
-    width: 64px; height: 64px; border-radius: 50%; flex-shrink: 0;
-    background: conic-gradient(from 0deg, #7c6ff5, #ff6fa0, #ffb86f, #7c6ff5);
+    width: 76px; height: 76px; border-radius: 50%; flex-shrink: 0; position: relative;
+    background:
+      repeating-radial-gradient(circle, rgba(255,255,255,.07) 0 1px, transparent 1px 4px),
+      conic-gradient(from 0deg, #2b2350, #120e28, #3a2560, #120e28, #2b2350);
+    box-shadow: 0 0 26px rgba(255,46,147,.4), inset 0 0 18px rgba(0,0,0,.7);
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 6px 18px rgba(124,111,245,.4);
   }
-  .vinyl::after { content: ''; width: 24px; height: 24px; border-radius: 50%; background: var(--card-solid); }
-  .vinyl.spinning { animation: spin 5s linear infinite; }
+  .vinyl::after {
+    content: ''; width: 27px; height: 27px; border-radius: 50%;
+    background: var(--grad-hot);
+    box-shadow: 0 0 14px rgba(255,46,147,.75);
+  }
+  .vinyl.spinning { animation: spin 4.5s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @media (min-width: 900px) { .vinyl { width: 92px; height: 92px; } .vinyl::after { width: 32px; height: 32px; } }
+
   .np-info { min-width: 0; flex: 1; }
   .np-title {
-    font-size: 17px; font-weight: 800; line-height: 1.3;
+    font-size: 19px; font-weight: 900; line-height: 1.25; letter-spacing: -.01em;
     overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
     -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow-wrap: anywhere; word-break: break-word;
   }
-  .np-sub { font-size: 12.5px; color: var(--sub); margin-top: 5px; }
+  @media (min-width: 900px) { .np-title { font-size: 25px; } }
+  .np-sub { font-size: 12px; color: var(--sub); margin-top: 8px; }
   .pill {
-    display: inline-block; padding: 2px 9px; border-radius: 999px;
-    font-size: 11px; font-weight: 700; color: #fff; background: var(--brand);
-    margin-right: 5px;
+    display: inline-block; padding: 3px 10px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 800; color: #fff; background: var(--grad-hot);
+    margin-right: 7px; letter-spacing: .04em;
+    box-shadow: 0 0 14px rgba(255,46,147,.45);
   }
-  .pill.alt { background: var(--brand2); }
+  .pill.alt { background: var(--grad-cool); box-shadow: 0 0 14px rgba(0,229,255,.4); }
+
   .progress-track {
-    background: var(--track);
-    border-radius: 8px; height: 7px; margin-top: 16px; overflow: hidden;
+    background: var(--track); border-radius: 8px; height: 6px;
+    margin-top: 18px; overflow: hidden;
   }
-  .progress-bar { background: var(--brand); height: 100%; width: 0%; border-radius: 8px; transition: width .3s linear; }
-  .progress-time { font-size: 11px; color: var(--sub); margin-top: 7px; text-align: right; font-variant-numeric: tabular-nums; }
-  .np-actions { display: flex; gap: 8px; margin-top: 16px; }
+  .progress-bar {
+    background: var(--grad-hot); height: 100%; width: 0%; border-radius: 8px;
+    transition: width .3s linear; box-shadow: 0 0 12px rgba(255,46,147,.8);
+  }
+  .progress-time {
+    font-size: 10.5px; color: var(--dimmer); margin-top: 8px; text-align: right;
+    font-variant-numeric: tabular-nums; letter-spacing: .06em;
+  }
+
+  .np-actions { display: flex; gap: 9px; margin-top: 18px; }
+  .np-actions + .np-actions { margin-top: 9px; }
   .btn {
-    flex: 1; padding: 13px 8px; border-radius: 16px; border: none;
-    font-size: 13.5px; font-weight: 700; color: #fff; background: var(--brand);
-    cursor: pointer; transition: transform .12s, opacity .12s;
+    flex: 1; padding: 13px 8px; border-radius: 14px; border: 1px solid transparent;
+    font-size: 13px; font-weight: 800; color: #fff; background: rgba(255,255,255,.07);
+    cursor: pointer; transition: transform .12s, box-shadow .2s, background .2s;
+    letter-spacing: .02em;
   }
-  .btn:active { transform: scale(.95); opacity: .85; }
-  .btn.alt { background: var(--brand2); }
-  .btn.ghost {
-    background: rgba(120,110,160,.14); color: var(--text);
-  }
-  /* 暫停鍵是這張卡片最常按的動作，給它實心底色拉出層級；
-     暫停中時換成綠色的「繼續」，狀態一眼看得出來。 */
-  .btn.primary { background: var(--brand); }
-  .btn.primary.resume { background: var(--brand2); }
-  .np-actions + .np-actions { margin-top: 8px; }
+  .btn:active { transform: scale(.96); }
+  .btn.primary { background: var(--grad-hot); box-shadow: 0 6px 22px rgba(255,46,147,.4); }
+  .btn.primary.resume { background: var(--grad-cool); box-shadow: 0 6px 22px rgba(0,229,255,.35); }
+  .btn.alt { background: var(--grad-cool); box-shadow: 0 6px 22px rgba(0,229,255,.3); }
+  .btn.ghost { background: rgba(255,255,255,.07); border-color: var(--edge); color: var(--text); }
+  .btn.ghost:hover { background: rgba(255,255,255,.12); }
+  .btn:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
 
-  /* ---- Lyrics ---- */
+  /* --- 歌詞：目前這句用霓虹發光 --- */
   .lyrics-box {
-    min-height: 130px; display: flex; flex-direction: column;
-    justify-content: center; gap: 12px; text-align: center;
+    min-height: 150px; display: flex; flex-direction: column;
+    justify-content: center; gap: 14px; text-align: center;
   }
-  .lyric-line { font-size: 14px; color: var(--sub); opacity: .55; transition: all .25s; }
+  @media (min-width: 900px) { .lyrics-box { min-height: 190px; } }
+  .lyric-line {
+    font-size: 14px; color: var(--dimmer); transition: all .3s ease;
+    overflow-wrap: anywhere;
+  }
   .lyric-line.current {
-    font-size: 20px; font-weight: 800; opacity: 1;
-    background: var(--brand);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
+    font-size: 22px; font-weight: 900; color: #fff; letter-spacing: -.01em;
+    text-shadow: 0 0 16px rgba(255,46,147,.85), 0 0 40px rgba(177,75,255,.5);
+  }
+  @media (min-width: 900px) { .lyric-line.current { font-size: 28px; } }
+
+  /* --- 音響控制台 --- */
+  .console { border-top: 1px solid var(--edge); margin-top: 18px; padding-top: 16px; }
+  .console-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .22em; text-transform: uppercase;
+    color: var(--sub); margin-bottom: 14px;
+  }
+  .live-dot { display: inline-flex; align-items: center; gap: 7px; color: var(--dimmer); }
+  .live-dot i {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--dimmer); display: block;
+    transition: background .25s, box-shadow .25s;
+  }
+  .live-dot.on { color: var(--neon-cyan); }
+  .live-dot.on i {
+    background: var(--neon-cyan);
+    box-shadow: 0 0 0 4px rgba(0,229,255,.15), 0 0 14px rgba(0,229,255,.9);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: .45; } }
+
+  .vu { display: flex; align-items: flex-end; gap: 3px; height: 52px; margin-bottom: 18px; }
+  .vu span {
+    flex: 1; border-radius: 2px;
+    background: linear-gradient(to top, var(--neon-violet), var(--neon-pink) 55%, var(--neon-amber));
+    height: 6%; opacity: .3; transition: height .16s ease, opacity .3s;
+  }
+  .vu.playing span { opacity: 1; box-shadow: 0 0 8px rgba(255,46,147,.5); }
+
+  .vol-row { display: flex; align-items: center; gap: 13px; }
+  .vol-row .ico { font-size: 14px; opacity: .6; flex-shrink: 0; }
+  .vol-val {
+    font-size: 11.5px; font-weight: 800; color: var(--neon-cyan);
+    min-width: 40px; text-align: right; font-variant-numeric: tabular-nums;
+    flex-shrink: 0; letter-spacing: .04em;
+  }
+  input[type=range].vol {
+    -webkit-appearance: none; appearance: none; flex: 1; min-width: 0;
+    height: 5px; border-radius: 99px; outline: none; background: var(--track); cursor: pointer;
+  }
+  input[type=range].vol::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 17px; height: 17px; border-radius: 50%;
+    background: #fff; border: none; box-shadow: 0 0 12px rgba(0,229,255,.9), 0 0 0 3px rgba(0,229,255,.25);
+  }
+  input[type=range].vol::-moz-range-thumb {
+    width: 17px; height: 17px; border-radius: 50%; border: none; background: #fff;
+    box-shadow: 0 0 12px rgba(0,229,255,.9), 0 0 0 3px rgba(0,229,255,.25);
   }
 
-  /* ---- Radio ---- */
-  .radio-status {
-    font-size: 12.5px; color: var(--sub); margin-bottom: 12px; min-height: 18px; font-weight: 600;
-  }
-  .grid-3 { display: flex; gap: 8px; }
-  .radio-btn {
-    flex: 1; padding: 14px 6px; border-radius: 16px; border: none;
-    background: rgba(120,110,160,.12); color: var(--text);
-    font-size: 12.5px; font-weight: 800; cursor: pointer;
-    transition: transform .12s, box-shadow .2s;
-    display: flex; flex-direction: column; align-items: center; gap: 4px;
-  }
-  .radio-btn .emoji { font-size: 18px; }
-  .radio-btn:active { transform: scale(.95); }
-  .radio-btn.kpop.active { background: linear-gradient(135deg, #a855f7, #ec4899); color: #fff; box-shadow: 0 8px 18px rgba(168,85,247,.4); }
-  .radio-btn.cpop.active { background: linear-gradient(135deg, #f43f5e, #f59e0b); color: #fff; box-shadow: 0 8px 18px rgba(244,63,94,.35); }
-  .radio-btn.epop.active { background: linear-gradient(135deg, #3b82f6, #06b6d4); color: #fff; box-shadow: 0 8px 18px rgba(59,130,246,.35); }
-
-  /* ---- Add song ---- */
+  /* --- 點歌輸入 --- */
   .add-row {
-    display: flex; align-items: center; gap: 10px;
-    background: rgba(120,110,160,.12); border-radius: 16px; padding: 4px 6px 4px 16px;
+    display: flex; align-items: center; gap: 11px;
+    background: rgba(255,255,255,.05); border: 1px solid var(--edge);
+    border-radius: 14px; padding: 3px 6px 3px 15px;
+    transition: border-color .2s, box-shadow .2s;
   }
-  .add-row .icon { color: var(--sub); font-size: 15px; }
+  .add-row:focus-within {
+    border-color: rgba(0,229,255,.5); box-shadow: 0 0 0 3px rgba(0,229,255,.12);
+  }
+  .add-row .icon { color: var(--dimmer); font-size: 14px; }
   .add-row input {
-    flex: 1; border: none; background: transparent; color: var(--text);
-    font-size: 15px; padding: 12px 4px; outline: none;
+    flex: 1; min-width: 0; border: none; background: transparent; color: var(--text);
+    font-size: 15px; padding: 13px 4px; outline: none;
   }
+  .add-row input::placeholder { color: var(--dimmer); }
+  .hint-typing { font-size: 11px; color: var(--dimmer); margin-top: 9px; min-height: 15px; letter-spacing: .02em; }
+
   .segmented {
     display: flex; gap: 4px; margin-top: 12px;
-    background: rgba(120,110,160,.12); border-radius: 14px; padding: 4px;
+    background: rgba(255,255,255,.05); border-radius: 13px; padding: 4px;
   }
   .seg-btn {
-    flex: 1; padding: 9px; border-radius: 11px; border: none; background: transparent;
-    color: var(--sub); font-size: 13px; font-weight: 700; cursor: pointer; transition: all .2s;
+    flex: 1; padding: 10px; border-radius: 10px; border: none; background: transparent;
+    color: var(--sub); font-size: 12.5px; font-weight: 800; cursor: pointer; transition: all .2s;
   }
-  .seg-btn.active { background: var(--card-solid); color: var(--text); box-shadow: 0 3px 10px rgba(0,0,0,.1); }
+  .seg-btn.active { background: var(--grad-hot); color: #fff; box-shadow: 0 4px 16px rgba(255,46,147,.35); }
   .add-btn {
-    margin-top: 12px; width: 100%; padding: 14px; border-radius: 16px; border: none;
-    background: var(--brand); color: #fff; font-size: 15px; font-weight: 800; cursor: pointer;
-    box-shadow: 0 8px 20px rgba(124,111,245,.35);
-    transition: transform .12s;
+    margin-top: 12px; width: 100%; padding: 14px; border-radius: 14px; border: none;
+    background: var(--grad-hot); color: #fff; font-size: 14.5px; font-weight: 900;
+    cursor: pointer; transition: transform .12s; letter-spacing: .03em;
+    box-shadow: 0 8px 26px rgba(255,46,147,.4);
   }
   .add-btn:active { transform: scale(.97); }
 
-  /* ---- Queue ---- */
-  .queue-empty { color: var(--sub); font-size: 13.5px; text-align: center; padding: 14px 0; }
+  /* --- 熱門電台 --- */
+  .radio-status { font-size: 12px; color: var(--sub); margin-bottom: 13px; min-height: 18px; font-weight: 600; }
+  .grid-3 { display: flex; gap: 9px; }
+  .radio-btn {
+    flex: 1; padding: 15px 6px; border-radius: 14px; border: 1px solid var(--edge);
+    background: rgba(255,255,255,.05); color: var(--text);
+    font-size: 12px; font-weight: 800; cursor: pointer; transition: all .2s;
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+  }
+  .radio-btn .emoji { font-size: 19px; }
+  .radio-btn:active { transform: scale(.96); }
+  .radio-btn.kpop.active { background: linear-gradient(135deg,#B14BFF,#FF2E93); border-color: transparent; box-shadow: 0 8px 24px rgba(177,75,255,.45); }
+  .radio-btn.cpop.active { background: linear-gradient(135deg,#FF2E93,#FFB020); border-color: transparent; box-shadow: 0 8px 24px rgba(255,46,147,.4); }
+  .radio-btn.epop.active { background: linear-gradient(135deg,#00E5FF,#B14BFF); border-color: transparent; box-shadow: 0 8px 24px rgba(0,229,255,.4); }
+
+  /* --- 清單 --- */
+  .queue-empty { color: var(--dimmer); font-size: 13px; text-align: center; padding: 18px 0; }
   .queue-item {
-    display: flex; align-items: center; gap: 12px;
-    padding: 11px 0; border-bottom: 1px solid var(--card-border);
+    display: flex; align-items: center; gap: 12px; padding: 12px 0;
+    border-bottom: 1px solid var(--edge);
   }
   .queue-item:last-child { border-bottom: none; }
   .queue-num {
-    width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
-    background: var(--brand); color: #fff;
-    font-size: 12px; font-weight: 800;
+    width: 27px; height: 27px; border-radius: 9px; flex-shrink: 0;
+    background: var(--grad-hot); color: #fff; font-size: 11.5px; font-weight: 900;
     display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 12px rgba(255,46,147,.35);
   }
   .queue-info { flex: 1; min-width: 0; }
-  .queue-title { font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .queue-sub { font-size: 11.5px; color: var(--sub); margin-top: 2px; }
+  .queue-title { font-size: 13.5px; font-weight: 700; overflow-wrap: anywhere; word-break: break-word; }
+  .queue-sub { font-size: 11px; color: var(--dimmer); margin-top: 3px; overflow-wrap: anywhere; }
   .mini-btn {
-    border: none; border-radius: 50%; width: 32px; height: 32px; flex-shrink: 0;
-    font-size: 13px; font-weight: 700;
-    background: rgba(120,110,160,.14); color: var(--text);
-    cursor: pointer; transition: transform .12s;
+    border: 1px solid var(--edge); border-radius: 10px; width: 32px; height: 32px; flex-shrink: 0;
+    font-size: 12px; font-weight: 800; background: rgba(255,255,255,.05); color: var(--text);
+    cursor: pointer; transition: all .15s;
   }
   .mini-btn:active { transform: scale(.9); }
-  .mini-btn.danger { background: rgba(255,59,48,.15); color: var(--danger); }
-  .mini-btn.replay { background: rgba(34,197,94,.15); color: #22c55e; }
+  .mini-btn.danger { background: rgba(255,77,106,.14); color: var(--danger); border-color: rgba(255,77,106,.3); }
+  .mini-btn.replay { background: rgba(0,229,255,.12); color: var(--neon-cyan); border-color: rgba(0,229,255,.3); }
   .history-item { cursor: pointer; }
   .history-item:active { opacity: .7; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .vinyl.spinning, .stage-light, .live-dot.on i { animation: none; }
+    .vu span { transition: none; }
+  }
 </style>
 </head>
 <body>
+  <div class="stage-light sl-1"></div>
+  <div class="stage-light sl-2"></div>
+  <div class="grain"></div>
+  <div class="grooves"></div>
+
   <div class="wrap">
   <div class="topbar">
     <div class="kicker">Pi3 Shield · Live Karaoke</div>
@@ -572,49 +718,66 @@ KARAOKE_HTML = """<!DOCTYPE html>
           <button class="btn ghost" onclick="skip()">⏭ 切歌</button>
         </div>
         <div class="np-actions">
-          <button class="btn" onclick="setMode('original')">🎤 原聲</button>
+          <button class="btn ghost" onclick="setMode('original')">🎤 原聲</button>
           <button class="btn alt" onclick="setMode('instrumental')">🎹 伴奏</button>
         </div>
       </div>
 
       <div class="card">
-        <div class="section-title">✨ 歌詞</div>
-        <div class="lyrics-box" id="lyrics"><div class="lyric-line dim">目前沒有播放</div></div>
+        <div class="section-title">歌詞</div>
+        <div class="lyrics-box" id="lyrics"><div class="lyric-line">目前沒有播放</div></div>
+
+        <div class="console">
+          <div class="console-head">
+            <span>音響控制</span>
+            <span class="live-dot" id="live-dot"><i></i><span id="live-text">待機中</span></span>
+          </div>
+          <div class="vu" id="vu"></div>
+          <div class="vol-row">
+            <span class="ico">🔈</span>
+            <input type="range" class="vol" id="vol" min="0" max="100" step="1" value="75"
+                   aria-label="音量" oninput="onVolInput(this.value)" onchange="onVolCommit(this.value)" />
+            <span class="ico">🔊</span>
+            <span class="vol-val" id="vol-val">75%</span>
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="col col-right">
       <div class="card">
-        <div class="section-title">🎶 點歌</div>
+        <div class="section-title">點歌</div>
         <div class="add-row">
           <span class="icon">🔍</span>
-          <input id="song-input" type="text" placeholder="輸入歌名或 YouTube 網址" onkeydown="if(event.key==='Enter')addSong()" />
+          <input id="song-input" type="text" placeholder="輸入歌名或 YouTube 網址"
+                 autocomplete="off" enterkeyhint="send" />
         </div>
+        <div class="hint-typing" id="type-hint"></div>
         <div class="segmented">
           <button id="mode-original" class="seg-btn active" onclick="selectMode('original')">🎤 原聲</button>
           <button id="mode-instrumental" class="seg-btn" onclick="selectMode('instrumental')">🎹 伴奏</button>
         </div>
-        <button class="add-btn" onclick="addSong()">➕ 加入排隊</button>
+        <button class="add-btn" onclick="addSong()">加入排隊</button>
       </div>
 
       <div class="card">
-        <div class="section-title">🔥 熱門歌曲・隨機連播</div>
+        <div class="section-title">熱門電台</div>
         <div class="radio-status" id="radio-status">目前沒有在隨機播放</div>
         <div class="grid-3">
           <button id="radio-kpop" class="radio-btn kpop" onclick="startRadio('kpop')"><span class="emoji">💜</span>K-pop</button>
           <button id="radio-cpop" class="radio-btn cpop" onclick="startRadio('cpop')"><span class="emoji">🏮</span>中文流行</button>
           <button id="radio-epop" class="radio-btn epop" onclick="startRadio('epop')"><span class="emoji">🎧</span>英文流行</button>
         </div>
-        <button class="btn ghost" style="width:100%; margin-top:10px" onclick="stopRadio()">⏸ 暫停熱門播放</button>
+        <button class="btn ghost" style="width:100%; margin-top:11px" onclick="stopRadio()">⏸ 暫停熱門播放</button>
       </div>
 
       <div class="card">
-        <div class="section-title">📃 排隊列表</div>
+        <div class="section-title">排隊列表<span class="count-pill" id="queue-count"></span></div>
         <div id="queue-list"><div class="queue-empty">排隊中沒有歌曲</div></div>
       </div>
 
       <div class="card">
-        <div class="section-title">🕘 已播歌曲</div>
+        <div class="section-title">已播歌曲<span class="count-pill" id="history-count"></span></div>
         <div id="history-list"><div class="queue-empty">還沒有播放紀錄</div></div>
       </div>
     </div>
@@ -632,18 +795,85 @@ function selectMode(mode) {
   document.getElementById('mode-instrumental').classList.toggle('active', mode === 'instrumental');
 }
 
+// 中文輸入法友善的 Enter：組字中的 Enter 是「選字」不是「送出」
+let composing = false, justComposed = false;
+function initInput() {
+  const input = document.getElementById('song-input');
+  const hint = document.getElementById('type-hint');
+  input.addEventListener('compositionstart', function () {
+    composing = true; hint.textContent = '選字中… 打完再按 Enter';
+  });
+  input.addEventListener('compositionend', function () {
+    composing = false; justComposed = true;
+    hint.textContent = '按 Enter 或點下面的按鈕加入排隊';
+    setTimeout(function () { justComposed = false; }, 120);
+  });
+  input.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    if (composing || e.isComposing || e.keyCode === 229 || justComposed) return;
+    e.preventDefault(); addSong();
+  });
+  input.addEventListener('input', function () {
+    if (!composing) hint.textContent = input.value ? '按 Enter 或點下面的按鈕加入排隊' : '';
+  });
+}
+
+let volTimer = null, volDragging = false;
+function onVolInput(v) {
+  volDragging = true;
+  document.getElementById('vol-val').textContent = v + '%';
+  clearTimeout(volTimer);
+  volTimer = setTimeout(function () { sendVolume(v); }, 180);
+}
+function onVolCommit(v) { clearTimeout(volTimer); sendVolume(v); }
+function sendVolume(v) {
+  fetch('/api/karaoke/volume', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({volume: Number(v)})
+  }).finally(function () { setTimeout(function () { volDragging = false; }, 400); });
+}
+
+const VU_BARS = 32;
+let vuPlaying = false;
+function initVU() {
+  let html = '';
+  for (let i = 0; i < VU_BARS; i++) html += '<span></span>';
+  document.getElementById('vu').innerHTML = html;
+  setInterval(tickVU, 130);
+}
+function tickVU() {
+  const vu = document.getElementById('vu');
+  const bars = vu.children;
+  for (let i = 0; i < bars.length; i++) {
+    let h = 6;
+    if (vuPlaying) {
+      const centre = 1 - Math.abs(i - (VU_BARS - 1) / 2) / ((VU_BARS - 1) / 2);
+      h = 10 + Math.random() * 82 * (0.3 + centre * 0.7);
+    }
+    bars[i].style.height = h.toFixed(0) + '%';
+  }
+  vu.classList.toggle('playing', vuPlaying);
+}
+
+function setLive(playing, title) {
+  vuPlaying = !!playing;
+  const dot = document.getElementById('live-dot');
+  dot.classList.toggle('on', !!playing);
+  document.getElementById('live-text').textContent = playing ? '播放中' : (title ? '已暫停' : '待機中');
+}
+function setCount(id, n) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = n > 0 ? n : '';
+}
 function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s == null ? '' : s;
   return div.innerHTML;
 }
-
 function fmtTime(sec) {
   if (sec == null) return '--:--';
   sec = Math.floor(sec);
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return m + ':' + String(s).padStart(2, '0');
+  return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
 }
 
 function renderNowPlaying(data) {
@@ -658,12 +888,13 @@ function renderNowPlaying(data) {
     vinyl.classList.remove('spinning');
     pauseBtn.textContent = '⏸ 暫停';
     pauseBtn.classList.remove('resume');
+    setLive(false, null);
     return;
   }
-  // 暫停時唱片停止轉動，讓「有沒有在播」用看的就知道，不用讀文字
   vinyl.classList.toggle('spinning', !data.paused);
   pauseBtn.textContent = data.paused ? '▶️ 繼續' : '⏸ 暫停';
   pauseBtn.classList.toggle('resume', !!data.paused);
+  setLive(!data.paused, np.title);
   const modeLabel = np.mode === 'instrumental' ? '伴奏版' : '原聲';
   const pillClass = np.mode === 'instrumental' ? 'pill alt' : 'pill';
   el.innerHTML = '<div class="np-title">' + escapeHtml(np.title) + '</div>' +
@@ -673,28 +904,36 @@ function renderNowPlaying(data) {
   document.getElementById('progress-time').textContent = fmtTime(data.time_pos) + ' / ' + fmtTime(data.duration);
 }
 
+function renderVolume(vol) {
+  if (vol == null || volDragging) return;
+  const slider = document.getElementById('vol');
+  if (document.activeElement === slider) return;
+  slider.value = vol;
+  document.getElementById('vol-val').textContent = vol + '%';
+}
+
 function renderLyrics(lyrics, timePos) {
   const el = document.getElementById('lyrics');
   if (!lyrics || lyrics.length === 0) {
-    el.innerHTML = '<div class="lyric-line dim">（沒有找到歌詞）</div>';
+    el.innerHTML = '<div class="lyric-line">（沒有找到歌詞）</div>';
     return;
   }
   let idx = -1;
   for (let i = 0; i < lyrics.length; i++) {
     if (lyrics[i].time <= (timePos || 0)) idx = i; else break;
   }
-  const start = Math.max(0, idx - 2);
-  const end = Math.min(lyrics.length, idx + 4);
+  const start = Math.max(0, idx - 2), end = Math.min(lyrics.length, idx + 4);
   let html = '';
   for (let i = start; i < end; i++) {
-    const cls = i === idx ? 'lyric-line current' : 'lyric-line';
-    html += '<div class="' + cls + '">' + escapeHtml(lyrics[i].text) + '</div>';
+    html += '<div class="' + (i === idx ? 'lyric-line current' : 'lyric-line') + '">' +
+            escapeHtml(lyrics[i].text) + '</div>';
   }
   el.innerHTML = html;
 }
 
 function renderQueue(queue) {
   const el = document.getElementById('queue-list');
+  setCount('queue-count', queue ? queue.length : 0);
   if (!queue || queue.length === 0) {
     el.innerHTML = '<div class="queue-empty">排隊中沒有歌曲</div>';
     return;
@@ -715,6 +954,7 @@ function renderQueue(queue) {
 
 function renderHistory(history) {
   const el = document.getElementById('history-list');
+  setCount('history-count', history ? history.length : 0);
   if (!history || history.length === 0) {
     el.innerHTML = '<div class="queue-empty">還沒有播放紀錄</div>';
     return;
@@ -723,7 +963,7 @@ function renderHistory(history) {
   history.forEach(function (h) {
     const modeLabel = h.mode === 'instrumental' ? '伴奏' : '原聲';
     html += '<div class="queue-item history-item" onclick="replaySong(\\'' + h.url + '\\', \\'' + h.mode + '\\')">' +
-      '<div class="queue-num">🎵</div>' +
+      '<div class="queue-num">♪</div>' +
       '<div class="queue-info"><div class="queue-title">' + escapeHtml(h.title) + '</div>' +
       '<div class="queue-sub">' + modeLabel + ' · ' + escapeHtml(h.requester) + '</div></div>' +
       '<button class="mini-btn replay" onclick="event.stopPropagation(); replaySong(\\'' + h.url + '\\', \\'' + h.mode + '\\')">🔁</button>' +
@@ -740,10 +980,9 @@ function replaySong(url, mode) {
 }
 
 const RADIO_LABELS = {kpop: 'K-pop', cpop: '中文流行', epop: '英文流行'};
-
 function renderRadio(category) {
-  const statusEl = document.getElementById('radio-status');
-  statusEl.textContent = category ? ('🔀 隨機播放中：' + RADIO_LABELS[category]) : '目前沒有在隨機播放';
+  document.getElementById('radio-status').textContent =
+    category ? ('🔀 隨機播放中：' + RADIO_LABELS[category]) : '目前沒有在隨機播放';
   ['kpop', 'cpop', 'epop'].forEach(function (c) {
     document.getElementById('radio-' + c).classList.toggle('active', c === category);
   });
@@ -752,6 +991,7 @@ function renderRadio(category) {
 function poll() {
   fetch('/api/karaoke/status').then(function (r) { return r.json(); }).then(function (data) {
     renderNowPlaying(data);
+    renderVolume(data.volume);
     renderQueue(data.queue);
     renderHistory(data.history);
     renderRadio(data.radio_category);
@@ -762,9 +1002,8 @@ function poll() {
       }
       renderLyrics(currentLyrics, data.time_pos);
     } else {
-      currentLyrics = null;
-      currentLyricsTitle = null;
-      document.getElementById('lyrics').innerHTML = '<div class="lyric-line dim">目前沒有播放</div>';
+      currentLyrics = null; currentLyricsTitle = null;
+      document.getElementById('lyrics').innerHTML = '<div class="lyric-line">目前沒有播放</div>';
     }
   }).catch(function () {});
 }
@@ -775,10 +1014,7 @@ function startRadio(category) {
     body: JSON.stringify({category: category})
   }).then(poll);
 }
-
-function stopRadio() {
-  fetch('/api/karaoke/radio/stop', {method: 'POST'}).then(poll);
-}
+function stopRadio() { fetch('/api/karaoke/radio/stop', {method: 'POST'}).then(poll); }
 
 function addSong() {
   const input = document.getElementById('song-input');
@@ -787,36 +1023,32 @@ function addSong() {
   fetch('/api/karaoke/add', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({query: query, mode: selectedMode, requester: '網頁點歌'})
-  }).then(function () { input.value = ''; poll(); });
+  }).then(function () {
+    input.value = '';
+    document.getElementById('type-hint').textContent = '';
+    poll();
+  });
 }
-
 function removeSong(id) {
   fetch('/api/karaoke/remove', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({id: id})
   }).then(poll);
 }
-
 function priority(id) {
   fetch('/api/karaoke/priority', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({id: id})
   }).then(poll);
 }
-
-function skip() {
-  fetch('/api/karaoke/skip', {method: 'POST'}).then(poll);
-}
-
+function skip() { fetch('/api/karaoke/skip', {method: 'POST'}).then(poll); }
 function togglePause() {
-  // 先樂觀更新按鈕，不然要等下一次輪詢（最多 1.5 秒）才有回饋，按起來像沒反應
   const btn = document.getElementById('pause-btn');
   const willPause = !btn.classList.contains('resume');
   btn.textContent = willPause ? '▶️ 繼續' : '⏸ 暫停';
   btn.classList.toggle('resume', willPause);
   fetch('/api/karaoke/pause', {method: 'POST'}).then(poll).catch(poll);
 }
-
 function setMode(mode) {
   fetch('/api/karaoke/mode', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -824,6 +1056,8 @@ function setMode(mode) {
   }).then(poll);
 }
 
+initInput();
+initVU();
 poll();
 setInterval(poll, 1500);
 </script>
@@ -1675,6 +1909,15 @@ def api_karaoke_pause():
     if state is None:
         return jsonify({'status': 'error', 'message': 'nothing playing'}), 400
     return jsonify({'status': 'ok', 'paused': state})
+
+
+@app.route('/api/karaoke/volume', methods=['POST'])
+def api_karaoke_volume():
+    data = request.get_json(force=True, silent=True) or {}
+    if 'volume' not in data:
+        return jsonify({'status': 'error', 'message': 'missing volume'}), 400
+    ok = karaoke.set_volume(data['volume'])
+    return jsonify({'status': 'ok' if ok else 'error', 'volume': karaoke.get_volume()})
 
 
 @app.route('/api/karaoke/skip', methods=['POST'])

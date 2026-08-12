@@ -335,6 +335,48 @@ def toggle_pause():
     return (not now) if set_pause(not now) else now
 
 
+# ---------- 音量 ----------
+# 用 ALSA（amixer）而不是 mpv 的 volume 屬性：mpv 的音量是「這個 process 的」，
+# 每首歌重開 mpv 就會回到預設值，使用者調過的音量留不住。
+# 走 ALSA 才是整台機器的音量，換歌也不會變。
+_VOL_MIN_DB, _VOL_MAX_DB = -4000, 0     # amixer 的單位是 0.01dB；-40dB ~ 0dB
+
+
+def get_volume():
+    """回傳 0~100 的音量百分比，讀不到回 None。"""
+    try:
+        out = subprocess.run(
+            ['amixer', '-c', str(HEADPHONE_CARD), 'sget', 'PCM'],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    m = re.search(r'\[(-?\d+\.\d+)dB\]', out)
+    if not m:
+        m2 = re.search(r'\[(\d+)%\]', out)
+        return int(m2.group(1)) if m2 else None
+    db = float(m.group(1)) * 100
+    pct = (db - _VOL_MIN_DB) / (_VOL_MAX_DB - _VOL_MIN_DB) * 100
+    return max(0, min(100, round(pct)))
+
+
+def set_volume(percent):
+    """設定音量（0~100）。回傳是否成功。"""
+    try:
+        pct = max(0, min(100, int(percent)))
+    except (TypeError, ValueError):
+        return False
+    db = int(_VOL_MIN_DB + (_VOL_MAX_DB - _VOL_MIN_DB) * pct / 100)
+    try:
+        r = subprocess.run(
+            ['amixer', '-c', str(HEADPHONE_CARD), 'sset', 'PCM', '--', str(db)],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
 def _pick_radio_song(category):
     """挑下一首電台歌曲。**同一次播放期間不會重複**。
 
@@ -499,6 +541,7 @@ def get_status():
         'time_pos': time_pos,
         'duration': duration,
         'paused': paused,
+        'volume': get_volume(),
         'queue': q,
         'radio_category': _radio_category,
     }
