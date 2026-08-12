@@ -936,197 +936,56 @@ function initBeat() {
   })(last);
 }
 
-/* ================= 天蠍（線描插畫） =================
-   使用者要的是星座卡上那隻「畫出來的」蠍子，不是星點連線的天文星圖。
-   所以這裡是參數化的線描：頭胸甲 + 七節腹部 + 兩支大螯 + 八隻腳
-   + 捲起來的尾巴與毒針，另外散幾顆四芒星呼應卡片風格。
-   座標以「整體寬度約 1」為單位，畫的時候 ctx.scale(S, S)，
-   所以線寬要除以 S 補回來，否則會被一起放大。                    */
-const ART = {
-  carapace: [[0,-0.260],[0.070,-0.245],[0.098,-0.190],[0.100,-0.120],[0.078,-0.070],[0,-0.055],
-             [-0.078,-0.070],[-0.100,-0.120],[-0.098,-0.190],[-0.070,-0.245]],
-  meso: [[0.092,-0.060],[0.096,0.000],[0.090,0.060],[0.078,0.120],[0.060,0.175],[0.038,0.218],
-         [0,0.238],
-         [-0.038,0.218],[-0.060,0.175],[-0.078,0.120],[-0.090,0.060],[-0.096,0.000],[-0.092,-0.060]],
-  ribs: [[-0.005,0.095],[0.055,0.090],[0.113,0.079],[0.168,0.062],[0.212,0.042]],
-  /* 尾巴繞到腳的外側（最遠 x=0.408 > 腳的 0.352），才不會跟腳纏在一起 */
-  tail: [[0,0.238],[0.086,0.300],[0.196,0.324],[0.300,0.294],[0.376,0.216],
-         [0.408,0.112],[0.396,0.006],[0.348,-0.086],[0.276,-0.160],[0.198,-0.208]],
-  telson: [[0.238,-0.196],[0.260,-0.244],[0.234,-0.288],[0.180,-0.294],[0.150,-0.250],[0.172,-0.202]],
-  sting: [[0.212,-0.290],[0.198,-0.344],[0.158,-0.386]],
-  /* 八隻腳一律往下外扇開，不往上跟大螯搶位置 */
-  legs: [[[0.098,-0.135],[0.190,-0.150],[0.280,-0.120],[0.330,-0.145]],
-         [[0.098,-0.100],[0.200,-0.086],[0.300,-0.036],[0.352,-0.048]],
-         [[0.098,-0.065],[0.200,-0.020],[0.296,0.048],[0.344,0.048]],
-         [[0.098,-0.030],[0.192,0.048],[0.278,0.126],[0.322,0.142]]],
-  armA: [[0.086,-0.252],[0.190,-0.298],[0.286,-0.330]],
-  armB: [[0.286,-0.330],[0.362,-0.360],[0.418,-0.364]],
-  hand: [[0.400,-0.386],[0.470,-0.426],[0.548,-0.416],[0.582,-0.366],
-         [0.552,-0.318],[0.470,-0.312],[0.414,-0.342]],
-  /* 鉗子的識別點是那個 V 形開口：中段兩指相距 0.096，約是指寬的三倍，
-     尖端才收到 0.018。上一版兩指只差 0.026，管寬幾乎把縫隙填滿，
-     整支就併成一片刀鋒，看起來像觸鬚不像螯。                        */
-  fingA: [[0.566,-0.398],[0.660,-0.448],[0.742,-0.478]],
-  fingB: [[0.552,-0.320],[0.652,-0.352],[0.740,-0.460]],
-  eyes: [[0.022,-0.165],[0.062,-0.222]],
-  sparks: [[-0.78,0.12,0.032],[0.76,0.30,0.024],[-0.40,0.44,0.020],
-           [0.30,-0.58,0.028],[-0.66,-0.50,0.018],[0.10,0.48,0.016]]
+/* ================= 天蠍座 =================
+   座標是照真實星圖排的：房宿的螯 → 心宿二（Antares，紅超巨星）
+   → 一路彎下去的身體 → 尾巴勾回來，末端兩顆是毒針（尾宿五 Shaula）。
+   第三欄是星等，數字越小越亮，直接拿來決定點的大小與亮度。      */
+const SCO = {
+  s: [[0.10,0.07,1.9], [0.20,0.17,2.3], [0.15,0.30,2.9], [0.31,0.27,2.9],
+      [0.37,0.38,1.0], [0.44,0.49,2.8], [0.49,0.61,2.3], [0.54,0.71,3.0],
+      [0.58,0.80,3.6], [0.66,0.88,3.3], [0.76,0.91,1.9], [0.85,0.86,3.0],
+      [0.90,0.78,2.4], [0.87,0.70,2.7], [0.81,0.65,1.6]],
+  l: [[0,1],[1,2],[1,3],[3,4],[4,5],[5,6],[6,7],[7,8],[8,9],[9,10],[10,11],[11,12],[12,13],[13,14]],
+  antares: 4
 };
 
-
-
-/* 用中點做二次貝茲，讓折線變成平滑曲線 */
-function pSmooth(ctx, pts, close) {
-  const n = pts.length;
+function drawScorpius(ctx, W, H, t) {
+  const S = Math.min(W * 0.62, H * 0.76);
+  const cx = W / 2 + (P.has ? (P.x - W / 2) * 0.014 : 0);
+  const cy = H / 2 + (P.has ? (P.y - H / 2) * 0.014 : 0);
+  const rot = Math.sin(t * 0.05) * 0.04;          /* 極慢擺動，像懸浮著 */
+  const co = Math.cos(rot), si = Math.sin(rot);
+  const pts = [];
+  for (let i = 0; i < SCO.s.length; i++) {
+    const dx = (SCO.s[i][0] - 0.5) * S, dy = (SCO.s[i][1] - 0.5) * S;
+    pts.push([cx + dx * co - dy * si, cy + dx * si + dy * co]);
+  }
+  /* 連線 */
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(168,139,224,' + (0.30 + BEAT.kick * 0.18).toFixed(3) + ')';
   ctx.beginPath();
-  if (close) {
-    ctx.moveTo((pts[n - 1][0] + pts[0][0]) / 2, (pts[n - 1][1] + pts[0][1]) / 2);
-    for (let i = 0; i < n; i++) {
-      const p = pts[i], q = pts[(i + 1) % n];
-      ctx.quadraticCurveTo(p[0], p[1], (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
-    }
-    ctx.closePath();
-  } else {
-    ctx.moveTo(pts[0][0], pts[0][1]);
-    for (let i = 1; i < n - 1; i++) {
-      const p = pts[i], q = pts[i + 1];
-      ctx.quadraticCurveTo(p[0], p[1], (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
-    }
-    ctx.lineTo(pts[n - 1][0], pts[n - 1][1]);
+  for (let i = 0; i < SCO.l.length; i++) {
+    const a = pts[SCO.l[i][0]], b = pts[SCO.l[i][1]];
+    ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
   }
-}
-
-/* 沿著跟 pSmooth 完全一致的曲線重新取樣。
-   ⚠️ 這個一定要做：tubeSides 若只吃 3 個控制點，外框只有 6 個點，
-   pSmooth 平滑後會把它抹成一顆橢圓——螯臂就變成一串 blob 而不是漸縮的肢節。*/
-function sampleOpen(pts, n) {
-  const m = pts.length;
-  if (m < 3) return pts.slice();
-  const segs = [];
-  let start = pts[0];
-  for (let i = 1; i < m - 1; i++) {
-    const end = [(pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2];
-    segs.push([start, pts[i], end]);
-    start = end;
+  ctx.stroke();
+  /* 星點 */
+  for (let i = 0; i < pts.length; i++) {
+    const mag = SCO.s[i][2];
+    const bright = Math.max(0.24, 1.05 - mag * 0.24);
+    const tw = 0.72 + 0.28 * Math.sin(t * (0.8 + i * 0.13) + i);
+    const r = Math.max(1.1, 3.6 - mag * 0.62);
+    const tint = i === SCO.antares ? '243,176,138' : '206,222,255';   /* 心宿二偏紅 */
+    const a = Math.min(1, bright * tw * (0.72 + BEAT.kick * 0.3));
+    ctx.beginPath();
+    ctx.arc(pts[i][0], pts[i][1], r * 4.2, 0, 6.283);
+    ctx.fillStyle = 'rgba(' + tint + ',' + (a * 0.10).toFixed(3) + ')';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(pts[i][0], pts[i][1], r, 0, 6.283);
+    ctx.fillStyle = 'rgba(' + tint + ',' + a.toFixed(3) + ')';
+    ctx.fill();
   }
-  segs.push([start, start, pts[m - 1]]);
-  const out = [];
-  for (let k = 0; k <= n; k++) {
-    const u = (k / n) * segs.length;
-    const si = Math.min(segs.length - 1, Math.floor(u)), tt = u - si;
-    const a = segs[si][0], c = segs[si][1], b = segs[si][2], it = 1 - tt;
-    out.push([it * it * a[0] + 2 * it * tt * c[0] + tt * tt * b[0],
-              it * it * a[1] + 2 * it * tt * c[1] + tt * tt * b[1]]);
-  }
-  return out;
-}
-
-/* 沿著中線往兩側偏移，做出會漸縮的管狀外框 */
-function tubeSides(pts, w0, w1) {
-  const n = pts.length, L = [], R = [];
-  for (let i = 0; i < n; i++) {
-    const p = pts[i], q = pts[Math.min(n - 1, i + 1)], o = pts[Math.max(0, i - 1)];
-    let dx = q[0] - o[0], dy = q[1] - o[1];
-    const d = Math.hypot(dx, dy) || 1;
-    dx /= d; dy /= d;
-    const w = (w0 + (w1 - w0) * (i / (n - 1))) / 2;
-    L.push([p[0] - dy * w, p[1] + dx * w]);
-    R.push([p[0] + dy * w, p[1] - dx * w]);
-  }
-  return {L: L, R: R};
-}
-function mirror(pts, s) {
-  const out = [];
-  for (let i = 0; i < pts.length; i++) out.push([pts[i][0] * s, pts[i][1]]);
-  return out;
-}
-function sparkle(ctx, x, y, r) {
-  ctx.beginPath();
-  ctx.moveTo(x, y - r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.quadraticCurveTo(x, y, x, y + r);
-  ctx.quadraticCurveTo(x, y, x - r, y);
-  ctx.quadraticCurveTo(x, y, x, y - r);
-  ctx.fill();
-}
-
-function drawScorpion(ctx, W, H, t) {
-  const S = Math.min(W * 0.44, H * 0.62);
-  const cx = W / 2 + (P.has ? (P.x - W / 2) * 0.016 : 0);
-  const cy = H / 2 + (P.has ? (P.y - H / 2) * 0.016 : 0);
-  const A = ART;
-  const tailSd = tubeSides(A.tail, 0.082, 0.034);
-
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(Math.sin(t * 0.05) * 0.035);
-  ctx.scale(S, S);
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-
-  const base = 0.42 + BEAT.kick * 0.30;
-  /* 兩趟：第一趟粗而淡當光暈，第二趟細而清楚 */
-  for (let pass = 0; pass < 2; pass++) {
-    const w = (pass === 0 ? 6.0 : 1.7) / S;
-    const a = pass === 0 ? base * 0.12 : base;
-    ctx.lineWidth = w;
-    ctx.strokeStyle = 'rgba(214,226,255,' + a.toFixed(3) + ')';
-    ctx.fillStyle = 'rgba(214,226,255,' + a.toFixed(3) + ')';
-
-    for (let s = -1; s <= 1; s += 2) {
-      for (let k = 0; k < A.legs.length; k++) {       /* 腳做成會漸縮的管，才有重量 */
-        const lg = tubeSides(sampleOpen(mirror(A.legs[k], s), 22), 0.030, 0.010);
-        pSmooth(ctx, lg.L.concat(lg.R.slice().reverse()), true); ctx.stroke();
-      }
-      const sa = tubeSides(sampleOpen(mirror(A.armA, s), 20), 0.062, 0.054);
-      pSmooth(ctx, sa.L.concat(sa.R.slice().reverse()), true); ctx.stroke();
-      const sb = tubeSides(sampleOpen(mirror(A.armB, s), 20), 0.056, 0.050);
-      pSmooth(ctx, sb.L.concat(sb.R.slice().reverse()), true); ctx.stroke();
-      pSmooth(ctx, mirror(A.hand, s), true); ctx.stroke();
-      const fa = tubeSides(sampleOpen(mirror(A.fingA, s), 20), 0.032, 0.006);   /* 鉗子的兩根指 */
-      pSmooth(ctx, fa.L.concat(fa.R.slice().reverse()), true); ctx.stroke();
-      const fb = tubeSides(sampleOpen(mirror(A.fingB, s), 20), 0.030, 0.006);
-      pSmooth(ctx, fb.L.concat(fb.R.slice().reverse()), true); ctx.stroke();
-    }
-
-    pSmooth(ctx, A.meso, true); ctx.stroke();
-    for (let i = 0; i < A.ribs.length; i++) {          /* 腹部體節 */
-      ctx.beginPath();
-      ctx.moveTo(-A.ribs[i][1], A.ribs[i][0]);
-      ctx.lineTo(A.ribs[i][1], A.ribs[i][0]);
-      ctx.stroke();
-    }
-    pSmooth(ctx, A.carapace, true); ctx.stroke();
-
-    /* 尾巴最後畫：蠍子的尾巴是舉在背上的，本來就該蓋過腳和身體 */
-    pSmooth(ctx, tailSd.L.concat(tailSd.R.slice().reverse()), true); ctx.stroke();
-    for (let i = 1; i < A.tail.length - 1; i++) {      /* 尾節分界 */
-      ctx.beginPath();
-      ctx.moveTo(tailSd.L[i][0], tailSd.L[i][1]);
-      ctx.lineTo(tailSd.R[i][0], tailSd.R[i][1]);
-      ctx.stroke();
-    }
-    pSmooth(ctx, A.telson, true); ctx.stroke();
-    const st = tubeSides(sampleOpen(A.sting, 18), 0.030, 0.002);       /* 毒針：漸縮成尖點 */
-    pSmooth(ctx, st.L.concat(st.R.slice().reverse()), true); ctx.stroke();
-
-    if (pass === 1) {
-      for (let s = -1; s <= 1; s += 2) {
-        for (let i = 0; i < A.eyes.length; i++) {
-          ctx.beginPath();
-          ctx.arc(A.eyes[i][0] * s, A.eyes[i][1], 0.013, 0, 6.283);
-          ctx.fill();
-        }
-      }
-      for (let i = 0; i < A.sparks.length; i++) {
-        const sp = A.sparks[i];
-        const tw = 0.45 + 0.55 * Math.sin(t * (0.9 + i * 0.21) + i * 1.7);
-        ctx.fillStyle = 'rgba(232,240,255,' + (base * tw).toFixed(3) + ')';
-        sparkle(ctx, sp[0], sp[1], sp[2] * (0.8 + tw * 0.4));
-      }
-    }
-  }
-  ctx.restore();
 }
 
 function selectMode(mode) {
@@ -1175,7 +1034,7 @@ function initStars() {
 
   function draw() {
     ctx.clearRect(0, 0, W, H);
-    drawScorpion(ctx, W, H, t);      /* 先畫，所以天蠍座在一般星點後面 */
+    drawScorpius(ctx, W, H, t);      /* 先畫，所以天蠍座在一般星點後面 */
     const parX = P.has ? (P.x - W / 2) * 0.022 : 0;
     const parY = P.has ? (P.y - H / 2) * 0.022 : 0;
     const near = [];
