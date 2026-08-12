@@ -452,11 +452,15 @@ KARAOKE_HTML = """<!DOCTYPE html>
   }
 
   /* ---------- 面板 ---------- */
+  /* 面板刻意「不」用 backdrop-filter：
+     1px 的星點被 20px 模糊一抹就消失，天蠍座整個看不到。
+     改成只留一層很薄的暗色紗 + 髮絲描邊，背景星空直接透過來。
+     可讀性改用 text-shadow 撐住，不靠底色遮擋。 */
   .panel {
     position: relative; border-radius: var(--r-lg); padding: 24px;
-    background: var(--glass);
-    backdrop-filter: blur(21px) saturate(155%); -webkit-backdrop-filter: blur(21px) saturate(155%);
-    box-shadow: 0 20px 60px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.06);
+    background: rgba(8,10,18,.24);
+    box-shadow: 0 14px 44px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.07);
+    text-shadow: 0 1px 3px rgba(3,4,10,.88);
     margin-bottom: 18px; overflow: hidden;
   }
   .col .panel { margin-bottom: 0; }
@@ -638,8 +642,9 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .btn {
     flex: 1; padding: 14px 8px; border-radius: var(--r-md); border: none;
     font-size: 13px; font-weight: 700; letter-spacing: .02em; color: var(--text);
-    background: var(--glass); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-    box-shadow: inset 0 0 0 1px var(--hairline);
+    background: rgba(255,255,255,.075); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.10);
+    text-shadow: none;
     cursor: pointer; transition: transform .14s, box-shadow .3s, background .3s, color .3s;
   }
   .btn:hover { background: var(--glass-hi);
@@ -656,7 +661,8 @@ KARAOKE_HTML = """<!DOCTYPE html>
   /* ---------- 歌詞：半透浮層 ---------- */
   .lyrics-float {
     position: relative; padding: 26px 20px; border-radius: var(--r-lg);
-    background: radial-gradient(120% 100% at 50% 0%, rgba(255,255,255,.05), transparent 72%);
+    background: radial-gradient(120% 100% at 50% 0%, rgba(255,255,255,.04), transparent 72%);
+    text-shadow: 0 1px 4px rgba(3,4,10,.9);
     min-height: 168px; display: flex; flex-direction: column;
     justify-content: center; gap: 15px; text-align: center; margin-bottom: 18px;
   }
@@ -699,8 +705,8 @@ KARAOKE_HTML = """<!DOCTYPE html>
   /* ---------- 點歌 ---------- */
   .field {
     display: flex; align-items: center; gap: 12px; border-radius: var(--r-md);
-    background: rgba(255,255,255,.045); padding: 3px 8px 3px 16px;
-    box-shadow: inset 0 0 0 1px var(--hairline);
+    background: rgba(255,255,255,.07); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    padding: 3px 8px 3px 16px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.10);
     transition: box-shadow .3s, background .3s;
   }
   .field:focus-within {
@@ -721,8 +727,8 @@ KARAOKE_HTML = """<!DOCTYPE html>
     font-size: 14.5px; font-weight: 800; letter-spacing: .04em; color: #fff; cursor: pointer;
     background: linear-gradient(140deg, rgba(168,139,224,.32), rgba(232,143,200,.20) 55%, rgba(111,227,196,.16));
     backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 0 32px rgba(168,139,224,.24);
-    transition: transform .14s, box-shadow .3s;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.16), 0 0 32px rgba(168,139,224,.24);
+    text-shadow: none; transition: transform .14s, box-shadow .3s;
   }
   .cta:hover { box-shadow: inset 0 0 0 1px rgba(255,255,255,.2), 0 0 44px rgba(168,139,224,.4); }
   .cta:active { transform: scale(.975); }
@@ -733,8 +739,9 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .rbtn {
     flex: 1; padding: 16px 6px; border-radius: var(--r-md); border: none; cursor: pointer;
     font-size: 12px; font-weight: 700; color: var(--text);
-    background: var(--glass); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-    box-shadow: inset 0 0 0 1px var(--hairline);
+    background: rgba(255,255,255,.075); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.10);
+    text-shadow: none;
     display: flex; flex-direction: column; align-items: center; gap: 7px;
     transition: transform .14s, box-shadow .3s, background .3s;
   }
@@ -753,7 +760,7 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .empty { color: var(--dim); font-size: 13px; text-align: center; padding: 20px 0; }
   .item { display: flex; align-items: center; gap: 13px; padding: 13px 10px;
           border-radius: var(--r-sm); margin: 0 -10px; transition: background .25s; }
-  .item + .item { box-shadow: inset 0 1px 0 rgba(255,255,255,.045); }
+  .item + .item { box-shadow: inset 0 1px 0 rgba(255,255,255,.07); }
   .item:hover { background: rgba(255,255,255,.04); }
   .idx { width: 30px; height: 30px; border-radius: 11px; flex-shrink: 0;
          font-size: 11.5px; font-weight: 800; color: var(--taro);
@@ -765,8 +772,9 @@ KARAOKE_HTML = """<!DOCTYPE html>
   .it-sub { font-size: 11px; color: var(--dim); margin-top: 4px; overflow-wrap: anywhere; }
   .mini { width: 33px; height: 33px; border-radius: 11px; flex-shrink: 0; border: none; cursor: pointer;
           font-size: 12px; font-weight: 700; color: var(--sub);
-          background: rgba(255,255,255,.05); box-shadow: inset 0 0 0 1px var(--hairline);
-          transition: all .2s; }
+          background: rgba(255,255,255,.07); backdrop-filter: blur(12px);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,.10);
+          text-shadow: none; transition: all .2s; }
   .mini:hover { color: var(--text); background: rgba(255,255,255,.09); }
   .mini:active { transform: scale(.9); }
   .mini.del:hover { color: var(--blush); box-shadow: inset 0 0 0 1px rgba(232,143,200,.32); }
@@ -954,7 +962,7 @@ function drawScorpius(ctx, W, H, t) {
   }
   /* 連線 */
   ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(168,139,224,' + (0.22 + BEAT.kick * 0.16).toFixed(3) + ')';
+  ctx.strokeStyle = 'rgba(168,139,224,' + (0.30 + BEAT.kick * 0.18).toFixed(3) + ')';
   ctx.beginPath();
   for (let i = 0; i < SCO.l.length; i++) {
     const a = pts[SCO.l[i][0]], b = pts[SCO.l[i][1]];
