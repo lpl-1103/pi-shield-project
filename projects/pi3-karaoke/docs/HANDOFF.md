@@ -1730,3 +1730,60 @@ VU 也改由同一個 rAF 迴圈驅動（原本是 `setInterval(tickVU, 140)`）
 `.layout, .col, .panel { min-width: 0; }`**，要用 `index('  .panel {\n')` 定位）
 → `node --check` 檢查 JS → 部署後線上再確認一次面板已無 `backdrop-filter`
 → API 正常 → 發布假資料 Artifact。
+
+---
+
+# 2026-08-12（第六次改版）天蠍改成線描插畫
+
+## 1. 我一開始就搞錯方向
+
+使用者要的是**星座卡上那隻「畫出來」的蠍子**（線描插畫），
+我做成了**天文星圖**（15 顆星按真實星等連線）。兩者完全是兩回事。
+
+原本的 `SCO` / `drawScorpius()` 整個移除，換成 `ART` / `drawScorpion()`：
+頭胸甲 + 七節腹部 + 兩支大螯 + 八隻腳 + 捲起的尾巴與毒針，全部參數化路徑。
+
+座標以「整體寬度約 1」為單位，畫的時候 `ctx.scale(S, S)`，
+**所以線寬要寫成 `1.7 / S`**，否則會被一起放大。
+
+## 2. ⚠️ 沒有繪圖庫也要能「看到」自己畫的東西
+
+這台機器沒有 PIL、沒有 matplotlib、沒有 node-canvas。
+但**線描插畫不可能盲改**——只靠讀 CSS/JS 判斷不出畫出來像不像蠍子。
+
+用的方法（之後畫 canvas 圖形都可以照做）：
+
+1. 用 `ast` 從 `KARAOKE_HTML` 抽出 `<script>`，砍掉會碰 DOM 的初始化呼叫
+2. 寫一個**假的 canvas 2D context**，只把 `moveTo`/`lineTo`/`quadraticCurveTo`/
+   `arc`/`stroke`/`fill` 錄成 SVG path
+3. node 執行 → 產生 SVG（外層包一個 `<g transform="translate scale">` 對應
+   程式裡的 `ctx.translate/scale`，這樣線寬單位才一致）
+4. **`qlmanage -t -s 900 -o outdir file.svg`** ← macOS 內建的 Quick Look，
+   可以把 SVG 轉成 PNG
+5. 讀那張 PNG 用眼睛看
+
+檔案在 `scratchpad/{prelude,epilogue,render_all}.js`，改完重跑就能再看一次。
+
+## 3. 四輪修正，每輪都是看了圖才知道問題
+
+| 輪次 | 看到的問題 | 原因與修法 |
+|---|---|---|
+| 1 | 像蜱蟲，螯像觸鬚 | 螯太小、腳太細。放大鉗掌、腳改成漸縮的管 |
+| 2 | 腳跟身體纏在一起 | 腳往上跟大螯搶位置。全部改成往下外扇開；尾巴繞到腳的外側（最遠 x 0.408 > 腳的 0.352） |
+| 3 | 鉗子併成一片刀鋒 | **兩指只差 0.026，管寬幾乎把縫隙填滿**。開口拉到中段相距 0.096（約指寬三倍），尖端才收到 0.018 |
+| 4 | 螯臂變成一串橢圓 blob | **`tubeSides` 只吃 3 個控制點**，外框只有 6 點，`pSmooth` 平滑後抹成橢圓。加 `sampleOpen()` 沿同一條曲線重取樣到 20～22 點 |
+
+第 4 點是最關鍵的一個坑：**要做漸縮的肢節，中線一定要先重取樣**，
+不然平滑會把短外框吃掉。`sampleOpen()` 重現的是跟 `pSmooth` 完全一樣的
+「中點二次貝茲」曲線，所以取樣結果跟實際描邊路徑一致。
+
+## 4. 繪製順序有意義
+
+腳 → 螯 → 腹部 → 頭胸甲 → **尾巴（最後）**。
+尾巴最後畫，因為蠍子的尾巴本來就是舉在背上的，本來就該蓋過腳和身體。
+
+## 5. 驗證
+
+`py_compile` → `node --check` 抽出來的 JS → **SVG/PNG 目視確認**
+→ 部署後線上確認 `drawScorpion` 在、`drawScorpius` 已無殘留、
+`onclick` 跳脫仍正確、面板仍透明 → API 正常 → 發布 Artifact。
