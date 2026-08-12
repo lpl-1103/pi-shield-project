@@ -54,7 +54,7 @@ MENU_TEXT = (
     "help = 顯示這個列表\n"
     "面板 = 傳送可點擊的圖形控制面板連結\n"
     "\n"
-    "點歌系統（詳見操作手冊）：\n"
+    "小樂電台（詳見操作手冊）：\n"
     "  點歌 <歌名>       = 加入排隊（尾綴0=伴奏版，例如「點歌 小星星0」）\n"
     "  @任何稱呼 <歌名>   = 跟點歌一樣，更口語（例如「@小樂 稻香」）\n"
     "  推薦 <歌手>        = 不知道歌名時，推薦該歌手前5首熱門歌，回數字直接點\n"
@@ -330,37 +330,43 @@ KARAOKE_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>🎤 點歌系統</title>
+<title>小樂電台</title>
 <style>
   /* ================================================================
-     刻意只做一套深色霓虹視覺，不提供淺色模式。
-     理由：這是 KTV 點歌系統，使用場景就是昏暗的房間 + 音樂。
-     做成「淺色為主、深色為輔」會兩邊都不到位；
-     直接把整個介面當成一個霓虹夜場來設計，才有記憶點。
+     小樂電台 — Y2K 霓虹賽博 × 輕潮簡約
+     視覺原則（跟前一版最大的差別）：
+       1. 顏色靠「透」不靠「亮」——低飽和光暈穿過毛玻璃，不用實心彩色塊
+       2. 不用邊框切割版面——用發光和模糊界定範圍
+       3. 只做一套深色。這是 KTV 系統，使用場景就是昏暗的房間 + 音樂。
      ================================================================ */
   :root {
     color-scheme: dark;
-    --void:   #06050D;
-    --void-2: #0C0A1A;
-    --panel:  rgba(20, 16, 42, .66);
-    --panel-solid: #14102A;
-    --edge:   rgba(255, 255, 255, .08);
-    --edge-hot: rgba(255, 46, 147, .35);
 
-    --neon-pink: #FF2E93;
-    --neon-cyan: #00E5FF;
-    --neon-violet: #B14BFF;
-    --neon-amber: #FFB020;
+    /* 底：深炭灰帶藍，不是純黑 */
+    --ink:    #0B0D14;
+    --ink-2:  #10131E;
 
-    --text:  #F2ECFF;
-    --sub:   #9C93C4;
-    --dimmer:#6B6390;
+    /* 低飽和霓虹 / 馬卡龍 */
+    --mist:  #7FA8D9;   /* 霧藍 */
+    --taro:  #A88BE0;   /* 香芋紫 */
+    --mint:  #6FE3C4;   /* 淺薄荷 */
+    --blush: #E68FC8;   /* 粉紫 */
+    --sun:   #F0C98A;   /* 暖砂，只給峰值 */
 
-    --grad-hot:  linear-gradient(135deg, #FF2E93, #B14BFF);
-    --grad-cool: linear-gradient(135deg, #00E5FF, #B14BFF);
-    --danger: #FF4D6A;
-    --track: rgba(255,255,255,.10);
+    --text:  #E8EAF4;
+    --sub:   #949AB5;
+    --dim:   #626883;
+
+    /* 毛玻璃 */
+    --glass:    rgba(255,255,255,.055);
+    --glass-hi: rgba(255,255,255,.10);
+    --hairline: rgba(255,255,255,.07);
+
+    --r-lg: 30px;   /* 面板 */
+    --r-md: 20px;   /* 按鈕 */
+    --r-sm: 14px;
   }
+
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html { scrollbar-width: none; }
   html::-webkit-scrollbar { display: none; }
@@ -368,434 +374,600 @@ KARAOKE_HTML = """<!DOCTYPE html>
   body {
     margin: 0; min-height: 100vh; position: relative; overflow-x: hidden;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
-                 "PingFang TC", "Microsoft JhengHei", sans-serif;
+                 "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
     color: var(--text);
-    padding: 22px 16px 64px;
-    background: var(--void);
+    background: var(--ink);
+    padding: 26px 16px 72px;
   }
 
-  /* --- 舞台燈：兩顆巨大的霓虹光暈，緩慢飄移 --- */
-  .stage-light {
-    position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
-    filter: blur(90px); opacity: .55;
-    will-change: transform;
-  }
-  .sl-1 {
-    width: 60vw; height: 60vw; max-width: 720px; max-height: 720px;
-    top: -18vw; right: -12vw;
-    background: radial-gradient(circle, var(--neon-pink) 0%, transparent 68%);
-    animation: drift1 22s ease-in-out infinite alternate;
-  }
-  .sl-2 {
-    width: 52vw; height: 52vw; max-width: 640px; max-height: 640px;
-    bottom: -16vw; left: -14vw;
-    background: radial-gradient(circle, var(--neon-cyan) 0%, transparent 68%);
-    animation: drift2 27s ease-in-out infinite alternate;
-    opacity: .38;
-  }
-  @keyframes drift1 { to { transform: translate3d(-7vw, 6vh, 0) scale(1.12); } }
-  @keyframes drift2 { to { transform: translate3d(6vw, -5vh, 0) scale(1.08); } }
+  /* ---------- 背景層 ---------- */
+  /* 極光：低飽和大光斑，緩慢飄移，是整頁顏色的來源 */
+  .aurora { position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
+            filter: blur(100px); will-change: transform; }
+  .au-1 { width: 66vw; height: 66vw; max-width: 780px; max-height: 780px;
+          top: -20vw; right: -14vw; opacity: .40;
+          background: radial-gradient(circle, var(--taro) 0%, transparent 66%);
+          animation: au1 26s ease-in-out infinite alternate; }
+  .au-2 { width: 58vw; height: 58vw; max-width: 700px; max-height: 700px;
+          bottom: -18vw; left: -16vw; opacity: .30;
+          background: radial-gradient(circle, var(--mist) 0%, transparent 66%);
+          animation: au2 33s ease-in-out infinite alternate; }
+  .au-3 { width: 40vw; height: 40vw; max-width: 500px; max-height: 500px;
+          top: 42%; left: 46%; opacity: .17;
+          background: radial-gradient(circle, var(--mint) 0%, transparent 68%);
+          animation: au3 40s ease-in-out infinite alternate; }
+  @keyframes au1 { to { transform: translate3d(-8vw, 7vh, 0) scale(1.15); } }
+  @keyframes au2 { to { transform: translate3d(7vw, -6vh, 0) scale(1.10); } }
+  @keyframes au3 { to { transform: translate3d(-10vw, -8vh, 0) scale(1.22); } }
 
-  /* --- 黑膠溝紋 + 顆粒：材質層 --- */
-  .grain {
-    position: fixed; inset: 0; pointer-events: none; z-index: 1; opacity: .06;
-    mix-blend-mode: screen;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
-  .grooves {
-    position: fixed; inset: 0; pointer-events: none; z-index: 1;
-    background: repeating-radial-gradient(circle at 88% 8%,
-      transparent 0 23px, rgba(255,255,255,.045) 23px 24px);
-    -webkit-mask-image: radial-gradient(circle at 88% 8%, #000 0%, transparent 58%);
-    mask-image: radial-gradient(circle at 88% 8%, #000 0%, transparent 58%);
-  }
+  /* 模糊聲波：播放時振幅變大 */
+  #wave { position: fixed; left: 0; right: 0; bottom: 0; width: 100%; height: 46vh;
+          z-index: 0; pointer-events: none; filter: blur(16px); opacity: .55; }
 
-  .wrap { position: relative; z-index: 2; max-width: 480px; margin: 0 auto; }
-  .layout { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
-  .layout, .col, .card { min-width: 0; }
+  /* 顆粒 */
+  .grain { position: fixed; inset: 0; pointer-events: none; z-index: 1; opacity: .055;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+  /* 游標光暈：帶緩動跟隨 */
+  .cursor-glow { position: fixed; top: 0; left: 0; width: 460px; height: 460px;
+    margin: -230px 0 0 -230px; border-radius: 50%; pointer-events: none; z-index: 2;
+    background: radial-gradient(circle, rgba(168,139,224,.16) 0%, rgba(127,168,217,.07) 42%, transparent 68%);
+    opacity: 0; transition: opacity .5s; will-change: transform; }
+  .ripple { position: fixed; border-radius: 50%; pointer-events: none; z-index: 3;
+    border: 1px solid rgba(232,143,200,.5); animation: rip .75s cubic-bezier(.2,.7,.3,1) forwards; }
+  @keyframes rip { from { width: 0; height: 0; margin: 0; opacity: .85; }
+                   to   { width: 260px; height: 260px; margin: -130px 0 0 -130px; opacity: 0; } }
+
+  .wrap { position: relative; z-index: 4; max-width: 480px; margin: 0 auto; }
+  .layout { display: grid; grid-template-columns: 1fr; gap: 18px; align-items: start; }
+  .layout, .col, .panel { min-width: 0; }
 
   @media (min-width: 900px) {
-    body { padding: 34px 30px 64px; }
+    body { padding: 38px 30px 72px; }
     .wrap { max-width: 1220px; }
-    .layout { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 24px; }
-    .col { display: grid; gap: 20px; align-content: start; }
-    .col-left { position: sticky; top: 26px; }
+    .layout { grid-template-columns: minmax(0, 1.52fr) minmax(0, 1fr); gap: 26px; }
+    .col { display: grid; gap: 22px; align-content: start; }
+    .col-left { position: sticky; top: 28px; }
   }
   @media (min-width: 1320px) {
-    body { padding: 38px 40px 64px; }
-    .wrap { max-width: 1380px; }
-    .layout { grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr); gap: 30px; }
+    body { padding: 42px 40px 72px; }
+    .wrap { max-width: 1400px; }
+    .layout { grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr); gap: 32px; }
   }
-  @media (min-width: 1600px) { body { padding: 42px 52px 68px; } .wrap { max-width: 1560px; } }
-  @media (min-width: 1900px) { .wrap { max-width: 1740px; } }
+  @media (min-width: 1600px) { body { padding: 46px 52px 76px; } .wrap { max-width: 1580px; } }
+  @media (min-width: 1900px) { .wrap { max-width: 1760px; } }
 
-  /* --- 標題 --- */
-  .topbar { margin-bottom: 24px; text-align: center; }
-  .topbar .kicker {
-    font-size: 10.5px; letter-spacing: .34em; text-transform: uppercase;
-    color: var(--neon-cyan); font-weight: 700;
-    text-shadow: 0 0 12px rgba(0,229,255,.6);
+  /* ---------- 品牌 ---------- */
+  .brand { margin-bottom: 26px; text-align: center; }
+  .on-air {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 10px; font-weight: 800; letter-spacing: .28em; text-transform: uppercase;
+    color: var(--dim); padding: 6px 14px; border-radius: 999px;
+    background: var(--glass); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    transition: color .35s, box-shadow .35s;
   }
-  .topbar h1 {
-    font-size: 27px; margin: 8px 0 0; font-weight: 900; letter-spacing: -.02em;
-    color: #fff;
-    text-shadow: 0 0 18px rgba(255,46,147,.55), 0 0 46px rgba(177,75,255,.35);
+  .on-air i { width: 6px; height: 6px; border-radius: 50%; background: var(--dim);
+              transition: background .35s, box-shadow .35s; }
+  .on-air.live { color: var(--mint); box-shadow: 0 0 26px rgba(111,227,196,.16); }
+  .on-air.live i { background: var(--mint); box-shadow: 0 0 12px var(--mint);
+                   animation: breathe 2.4s ease-in-out infinite; }
+  @keyframes breathe { 50% { opacity: .35; } }
+
+  .wordmark {
+    font-size: 38px; font-weight: 900; letter-spacing: .04em; margin: 12px 0 0;
+    background: linear-gradient(105deg, var(--mist) 0%, var(--taro) 38%, var(--blush) 66%, var(--mint) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 0 22px rgba(168,139,224,.35));
   }
+  .brand-sub { font-size: 9.5px; letter-spacing: .42em; text-transform: uppercase;
+               color: var(--dim); margin-top: 9px; }
   @media (min-width: 900px) {
-    .topbar { text-align: left; margin-bottom: 28px; }
-    .topbar h1 { font-size: 36px; }
+    .brand { text-align: left; margin-bottom: 30px; }
+    .wordmark { font-size: 52px; }
   }
 
-  /* --- 卡片：煙燻玻璃 --- */
-  .card {
-    background: var(--panel);
-    backdrop-filter: blur(26px) saturate(150%);
-    -webkit-backdrop-filter: blur(26px) saturate(150%);
-    border: 1px solid var(--edge);
-    border-radius: 22px;
-    padding: 20px;
-    margin-bottom: 16px;
-    position: relative;
-    box-shadow: 0 18px 44px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.07);
+  /* ---------- 面板：不用邊框，用光暈界定 ---------- */
+  .panel {
+    position: relative; border-radius: var(--r-lg); padding: 24px;
+    background: var(--glass);
+    backdrop-filter: blur(24px) saturate(140%); -webkit-backdrop-filter: blur(24px) saturate(140%);
+    box-shadow: 0 20px 60px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.055);
+    margin-bottom: 18px; overflow: hidden;
   }
-  .col .card { margin-bottom: 0; }
-
-  /* 主角卡片：外圈跑一圈霓虹描邊 */
-  #now-playing-card {
-    border-color: var(--edge-hot);
-    box-shadow: 0 20px 60px rgba(255,46,147,.16),
-                0 0 0 1px rgba(255,46,147,.12),
-                inset 0 1px 0 rgba(255,255,255,.09);
+  .col .panel { margin-bottom: 0; }
+  /* 內部高光跟著游標跑 */
+  .panel::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+    background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 0%),
+                rgba(255,255,255,.07), transparent 62%);
+    opacity: 0; transition: opacity .4s;
   }
+  .panel:hover::before { opacity: 1; }
+  /* 沒有邊框，改用一圈極淡的漸層描邊 */
+  .panel::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    padding: 1px;
+    background: linear-gradient(150deg, rgba(255,255,255,.12), rgba(255,255,255,.02) 40%, transparent 70%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+  }
+  .panel > * { position: relative; z-index: 1; }
 
-  .section-title {
-    font-size: 10.5px; color: var(--sub); font-weight: 800; margin-bottom: 14px;
-    text-transform: uppercase; letter-spacing: .22em;
+  .label {
+    font-size: 10px; color: var(--sub); font-weight: 800; margin-bottom: 16px;
+    text-transform: uppercase; letter-spacing: .24em;
     display: flex; align-items: center; gap: 8px;
   }
-  .count-pill {
-    margin-left: auto; font-size: 10.5px; font-weight: 800; letter-spacing: 0;
-    background: rgba(255,46,147,.16); color: #FF7FBB;
-    padding: 3px 9px; border-radius: 999px;
-  }
-  .dim { color: var(--sub); font-weight: 400; }
+  .tally { margin-left: auto; font-size: 10px; font-weight: 800; letter-spacing: 0;
+           color: var(--taro); background: rgba(168,139,224,.13);
+           padding: 3px 10px; border-radius: 999px; }
+  .muted { color: var(--sub); font-weight: 400; }
 
-  /* --- 現正播放 --- */
-  .np-head { display: flex; align-items: center; gap: 16px; }
-  .vinyl {
-    width: 76px; height: 76px; border-radius: 50%; flex-shrink: 0; position: relative;
+  /* ---------- 3D 唱盤 ---------- */
+  .deck-stage { perspective: 1100px; perspective-origin: 50% 26%;
+                display: flex; justify-content: center; padding: 4px 0 6px; }
+  .deck {
+    position: relative; width: 236px; height: 236px; flex-shrink: 0;
+    transform-style: preserve-3d;
+    transform: rotateX(53deg) rotateZ(calc(-14deg + var(--tz, 0deg))) rotateY(var(--ty, 0deg));
+    transition: transform .5s cubic-bezier(.2,.7,.3,1);
+  }
+  @media (min-width: 900px) { .deck { width: 290px; height: 290px; } .deck-stage { padding: 10px 0 14px; } }
+
+  /* 盤體：用堆疊 box-shadow 做出厚度 */
+  .deck-base {
+    position: absolute; inset: 0; border-radius: 40px;
+    background: linear-gradient(150deg, #232739 0%, #171b28 46%, #101320 100%);
+    box-shadow:
+      0 2px 0 #1a1e2c, 0 4px 0 #181c29, 0 6px 0 #161926, 0 8px 0 #131623,
+      0 10px 0 #111420, 0 12px 0 #0f121d, 0 14px 0 #0d101a,
+      0 40px 60px rgba(0,0,0,.62),
+      inset 0 1px 0 rgba(255,255,255,.10);
+  }
+  .platter {
+    position: absolute; left: 50%; top: 50%; width: 74%; height: 74%;
+    margin: -37% 0 0 -37%; border-radius: 50%;
+    background: radial-gradient(circle, #1c2030 0%, #0f1220 78%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.05), inset 0 0 30px rgba(0,0,0,.8);
+  }
+  .record {
+    position: absolute; inset: 6%; border-radius: 50%;
     background:
-      repeating-radial-gradient(circle, rgba(255,255,255,.07) 0 1px, transparent 1px 4px),
-      conic-gradient(from 0deg, #2b2350, #120e28, #3a2560, #120e28, #2b2350);
-    box-shadow: 0 0 26px rgba(255,46,147,.4), inset 0 0 18px rgba(0,0,0,.7);
+      repeating-radial-gradient(circle, rgba(255,255,255,.055) 0 1px, transparent 1px 5px),
+      conic-gradient(from 0deg,
+        #191d2c 0deg, #2b3149 34deg, #171b29 78deg, #262b40 132deg,
+        #161a28 190deg, #2f3550 244deg, #181c2b 300deg, #191d2c 360deg);
+    box-shadow: inset 0 0 40px rgba(0,0,0,.85), 0 0 34px rgba(168,139,224,.18);
+  }
+  .record.spinning { animation: spin 2.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .rec-label {
+    position: absolute; left: 50%; top: 50%; width: 34%; height: 34%;
+    margin: -17% 0 0 -17%; border-radius: 50%;
+    background: linear-gradient(135deg, var(--taro), var(--blush) 55%, var(--mist));
+    box-shadow: 0 0 22px rgba(232,143,200,.42), inset 0 -2px 6px rgba(0,0,0,.3);
     display: flex; align-items: center; justify-content: center;
   }
-  .vinyl::after {
-    content: ''; width: 27px; height: 27px; border-radius: 50%;
-    background: var(--grad-hot);
-    box-shadow: 0 0 14px rgba(255,46,147,.75);
-  }
-  .vinyl.spinning { animation: spin 4.5s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @media (min-width: 900px) { .vinyl { width: 92px; height: 92px; } .vinyl::after { width: 32px; height: 32px; } }
+  .rec-label::after { content: ''; width: 14%; height: 14%; border-radius: 50%;
+                      background: #0B0D14; box-shadow: inset 0 0 4px rgba(0,0,0,.9); }
 
-  .np-info { min-width: 0; flex: 1; }
+  /* 唱針：播放時擺進盤面，停止時歸位 */
+  .tonearm {
+    position: absolute; right: 7%; top: 11%; width: 46%; height: 8px;
+    transform-origin: calc(100% - 9px) 50%;
+    transform: rotate(34deg);
+    transition: transform .9s cubic-bezier(.4,.05,.2,1);
+  }
+  .tonearm.on { transform: rotate(64deg); }
+  .tonearm .arm {
+    position: absolute; left: 14px; right: 12px; top: 3px; height: 3px; border-radius: 2px;
+    background: linear-gradient(90deg, #767c95, #9aa1bd);
+    box-shadow: 0 1px 3px rgba(0,0,0,.6);
+  }
+  .tonearm .pivot {
+    position: absolute; right: 0; top: 50%; width: 19px; height: 19px; margin-top: -9.5px;
+    border-radius: 50%; background: radial-gradient(circle at 35% 30%, #444b63, #1d2130);
+    box-shadow: 0 3px 8px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.16);
+  }
+  .tonearm .head {
+    position: absolute; left: 0; top: 50%; width: 15px; height: 9px; margin-top: -4.5px;
+    border-radius: 3px; background: linear-gradient(135deg, #9aa1bd, #545a74);
+    box-shadow: 0 2px 5px rgba(0,0,0,.55);
+  }
+  /* 盤面上的指示燈 */
+  .deck-leds { position: absolute; left: 9%; bottom: 8%; display: flex; gap: 8px; }
+  .deck-leds i { width: 7px; height: 7px; border-radius: 50%;
+                 background: rgba(255,255,255,.10); transition: all .4s; }
+  .deck-leds i.on:nth-child(1) { background: var(--mint); box-shadow: 0 0 10px var(--mint); }
+  .deck-leds i.on:nth-child(2) { background: var(--blush); box-shadow: 0 0 10px var(--blush); }
+
+  /* ---------- 現正播放 ---------- */
+  .np { margin-top: 18px; text-align: center; }
+  @media (min-width: 900px) { .np { text-align: left; } }
   .np-title {
-    font-size: 19px; font-weight: 900; line-height: 1.25; letter-spacing: -.01em;
+    font-size: 21px; font-weight: 800; line-height: 1.3; letter-spacing: -.01em;
     overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
     -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     overflow-wrap: anywhere; word-break: break-word;
   }
-  @media (min-width: 900px) { .np-title { font-size: 25px; } }
-  .np-sub { font-size: 12px; color: var(--sub); margin-top: 8px; }
-  .pill {
-    display: inline-block; padding: 3px 10px; border-radius: 999px;
-    font-size: 10.5px; font-weight: 800; color: #fff; background: var(--grad-hot);
-    margin-right: 7px; letter-spacing: .04em;
-    box-shadow: 0 0 14px rgba(255,46,147,.45);
+  @media (min-width: 900px) { .np-title { font-size: 27px; } }
+  .np-sub { font-size: 12px; color: var(--sub); margin-top: 10px;
+            display: flex; align-items: center; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  @media (min-width: 900px) { .np-sub { justify-content: flex-start; } }
+  .chip {
+    padding: 4px 12px; border-radius: 999px; font-size: 10.5px; font-weight: 800;
+    letter-spacing: .06em; color: var(--taro); background: rgba(168,139,224,.14);
   }
-  .pill.alt { background: var(--grad-cool); box-shadow: 0 0 14px rgba(0,229,255,.4); }
+  .chip.alt { color: var(--mint); background: rgba(111,227,196,.13); }
 
-  .progress-track {
-    background: var(--track); border-radius: 8px; height: 6px;
-    margin-top: 18px; overflow: hidden;
-  }
-  .progress-bar {
-    background: var(--grad-hot); height: 100%; width: 0%; border-radius: 8px;
-    transition: width .3s linear; box-shadow: 0 0 12px rgba(255,46,147,.8);
-  }
-  .progress-time {
-    font-size: 10.5px; color: var(--dimmer); margin-top: 8px; text-align: right;
-    font-variant-numeric: tabular-nums; letter-spacing: .06em;
-  }
+  .bar { height: 4px; border-radius: 99px; margin-top: 20px;
+         background: rgba(255,255,255,.07); overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0%; border-radius: 99px;
+    background: linear-gradient(90deg, var(--mist), var(--taro) 52%, var(--blush));
+    box-shadow: 0 0 14px rgba(168,139,224,.6); transition: width .3s linear; }
+  .clock { font-size: 10.5px; color: var(--dim); margin-top: 10px;
+           font-variant-numeric: tabular-nums; letter-spacing: .08em;
+           display: flex; justify-content: space-between; }
 
-  .np-actions { display: flex; gap: 9px; margin-top: 18px; }
-  .np-actions + .np-actions { margin-top: 9px; }
+  /* ---------- 按鈕：一律毛玻璃，沒有實心色塊 ---------- */
+  .row { display: flex; gap: 10px; margin-top: 18px; }
   .btn {
-    flex: 1; padding: 13px 8px; border-radius: 14px; border: 1px solid transparent;
-    font-size: 13px; font-weight: 800; color: #fff; background: rgba(255,255,255,.07);
-    cursor: pointer; transition: transform .12s, box-shadow .2s, background .2s;
-    letter-spacing: .02em;
+    flex: 1; padding: 14px 8px; border-radius: var(--r-md); border: none;
+    font-size: 13px; font-weight: 700; letter-spacing: .02em; color: var(--text);
+    background: var(--glass); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    box-shadow: inset 0 0 0 1px var(--hairline);
+    cursor: pointer; transition: transform .14s, box-shadow .3s, background .3s, color .3s;
   }
-  .btn:active { transform: scale(.96); }
-  .btn.primary { background: var(--grad-hot); box-shadow: 0 6px 22px rgba(255,46,147,.4); }
-  .btn.primary.resume { background: var(--grad-cool); box-shadow: 0 6px 22px rgba(0,229,255,.35); }
-  .btn.alt { background: var(--grad-cool); box-shadow: 0 6px 22px rgba(0,229,255,.3); }
-  .btn.ghost { background: rgba(255,255,255,.07); border-color: var(--edge); color: var(--text); }
-  .btn.ghost:hover { background: rgba(255,255,255,.12); }
-  .btn:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+  .btn:hover { background: var(--glass-hi);
+               box-shadow: inset 0 0 0 1px rgba(255,255,255,.13), 0 0 26px rgba(168,139,224,.22); }
+  .btn:active { transform: scale(.965); }
+  .btn:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+  /* 啟用態＝染色的霧，不是實心 */
+  .btn.on {
+    color: #fff;
+    background: linear-gradient(140deg, rgba(168,139,224,.30), rgba(127,168,217,.16));
+    box-shadow: inset 0 0 0 1px rgba(168,139,224,.36), 0 0 30px rgba(168,139,224,.26);
+  }
+  .btn.on-mint {
+    color: #fff;
+    background: linear-gradient(140deg, rgba(111,227,196,.26), rgba(127,168,217,.14));
+    box-shadow: inset 0 0 0 1px rgba(111,227,196,.34), 0 0 30px rgba(111,227,196,.22);
+  }
 
-  /* --- 歌詞：目前這句用霓虹發光 --- */
-  .lyrics-box {
-    min-height: 150px; display: flex; flex-direction: column;
-    justify-content: center; gap: 14px; text-align: center;
+  /* ---------- 歌詞：半透浮層，不被框死 ---------- */
+  .lyrics-float {
+    position: relative; padding: 26px 20px; border-radius: var(--r-lg);
+    background: radial-gradient(120% 100% at 50% 0%, rgba(255,255,255,.05), transparent 72%);
+    min-height: 168px; display: flex; flex-direction: column;
+    justify-content: center; gap: 15px; text-align: center;
+    margin-bottom: 18px;
   }
-  @media (min-width: 900px) { .lyrics-box { min-height: 190px; } }
-  .lyric-line {
-    font-size: 14px; color: var(--dimmer); transition: all .3s ease;
-    overflow-wrap: anywhere;
+  .col .lyrics-float { margin-bottom: 0; }
+  @media (min-width: 900px) { .lyrics-float { min-height: 206px; } }
+  .ly { font-size: 14px; color: var(--dim); transition: all .45s cubic-bezier(.2,.7,.3,1);
+        overflow-wrap: anywhere; }
+  .ly.near { color: var(--sub); }
+  .ly.cur {
+    font-size: 23px; font-weight: 800; color: #fff; letter-spacing: -.01em;
+    text-shadow: 0 0 18px rgba(232,143,200,.55), 0 0 44px rgba(168,139,224,.4);
   }
-  .lyric-line.current {
-    font-size: 22px; font-weight: 900; color: #fff; letter-spacing: -.01em;
-    text-shadow: 0 0 16px rgba(255,46,147,.85), 0 0 40px rgba(177,75,255,.5);
-  }
-  @media (min-width: 900px) { .lyric-line.current { font-size: 28px; } }
+  @media (min-width: 900px) { .ly.cur { font-size: 30px; } }
 
-  /* --- 音響控制台 --- */
-  .console { border-top: 1px solid var(--edge); margin-top: 18px; padding-top: 16px; }
-  .console-head {
-    display: flex; align-items: center; justify-content: space-between;
-    font-size: 10.5px; font-weight: 800; letter-spacing: .22em; text-transform: uppercase;
-    color: var(--sub); margin-bottom: 14px;
-  }
-  .live-dot { display: inline-flex; align-items: center; gap: 7px; color: var(--dimmer); }
-  .live-dot i {
-    width: 7px; height: 7px; border-radius: 50%; background: var(--dimmer); display: block;
-    transition: background .25s, box-shadow .25s;
-  }
-  .live-dot.on { color: var(--neon-cyan); }
-  .live-dot.on i {
-    background: var(--neon-cyan);
-    box-shadow: 0 0 0 4px rgba(0,229,255,.15), 0 0 14px rgba(0,229,255,.9);
-    animation: pulse 1.6s ease-in-out infinite;
-  }
-  @keyframes pulse { 50% { opacity: .45; } }
+  /* ---------- 音場 ---------- */
+  .vu { display: flex; align-items: flex-end; gap: 3px; height: 46px; margin-bottom: 20px; }
+  .vu span { flex: 1; border-radius: 99px; height: 8%; opacity: .26;
+    background: linear-gradient(to top, var(--mist), var(--taro) 46%, var(--blush) 78%, var(--sun));
+    transition: height .16s ease, opacity .4s; }
+  .vu.on span { opacity: .95; }
 
-  .vu { display: flex; align-items: flex-end; gap: 3px; height: 52px; margin-bottom: 18px; }
-  .vu span {
-    flex: 1; border-radius: 2px;
-    background: linear-gradient(to top, var(--neon-violet), var(--neon-pink) 55%, var(--neon-amber));
-    height: 6%; opacity: .3; transition: height .16s ease, opacity .3s;
-  }
-  .vu.playing span { opacity: 1; box-shadow: 0 0 8px rgba(255,46,147,.5); }
-
-  .vol-row { display: flex; align-items: center; gap: 13px; }
-  .vol-row .ico { font-size: 14px; opacity: .6; flex-shrink: 0; }
-  .vol-val {
-    font-size: 11.5px; font-weight: 800; color: var(--neon-cyan);
-    min-width: 40px; text-align: right; font-variant-numeric: tabular-nums;
-    flex-shrink: 0; letter-spacing: .04em;
-  }
+  .vol-row { display: flex; align-items: center; gap: 14px; }
+  .vol-row .ic { font-size: 13px; opacity: .5; flex-shrink: 0; }
+  .vol-num { font-size: 11.5px; font-weight: 800; color: var(--mint); min-width: 42px;
+             text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0;
+             letter-spacing: .05em; }
   input[type=range].vol {
     -webkit-appearance: none; appearance: none; flex: 1; min-width: 0;
-    height: 5px; border-radius: 99px; outline: none; background: var(--track); cursor: pointer;
+    height: 4px; border-radius: 99px; outline: none; cursor: pointer;
+    background: rgba(255,255,255,.09);
   }
   input[type=range].vol::-webkit-slider-thumb {
-    -webkit-appearance: none; appearance: none; width: 17px; height: 17px; border-radius: 50%;
-    background: #fff; border: none; box-shadow: 0 0 12px rgba(0,229,255,.9), 0 0 0 3px rgba(0,229,255,.25);
+    -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%;
+    background: rgba(255,255,255,.92); border: none;
+    box-shadow: 0 0 14px rgba(111,227,196,.7), 0 0 0 4px rgba(111,227,196,.14);
   }
   input[type=range].vol::-moz-range-thumb {
-    width: 17px; height: 17px; border-radius: 50%; border: none; background: #fff;
-    box-shadow: 0 0 12px rgba(0,229,255,.9), 0 0 0 3px rgba(0,229,255,.25);
+    width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(255,255,255,.92);
+    box-shadow: 0 0 14px rgba(111,227,196,.7), 0 0 0 4px rgba(111,227,196,.14);
   }
 
-  /* --- 點歌輸入 --- */
-  .add-row {
-    display: flex; align-items: center; gap: 11px;
-    background: rgba(255,255,255,.05); border: 1px solid var(--edge);
-    border-radius: 14px; padding: 3px 6px 3px 15px;
-    transition: border-color .2s, box-shadow .2s;
+  /* ---------- 點歌 ---------- */
+  .field {
+    display: flex; align-items: center; gap: 12px; border-radius: var(--r-md);
+    background: rgba(255,255,255,.045); padding: 3px 8px 3px 16px;
+    box-shadow: inset 0 0 0 1px var(--hairline);
+    transition: box-shadow .3s, background .3s;
   }
-  .add-row:focus-within {
-    border-color: rgba(0,229,255,.5); box-shadow: 0 0 0 3px rgba(0,229,255,.12);
+  .field:focus-within {
+    background: rgba(255,255,255,.07);
+    box-shadow: inset 0 0 0 1px rgba(111,227,196,.4), 0 0 26px rgba(111,227,196,.16);
   }
-  .add-row .icon { color: var(--dimmer); font-size: 14px; }
-  .add-row input {
+  .field .ic { color: var(--dim); font-size: 13px; }
+  .field input {
     flex: 1; min-width: 0; border: none; background: transparent; color: var(--text);
-    font-size: 15px; padding: 13px 4px; outline: none;
+    font-size: 15px; padding: 14px 4px; outline: none;
   }
-  .add-row input::placeholder { color: var(--dimmer); }
-  .hint-typing { font-size: 11px; color: var(--dimmer); margin-top: 9px; min-height: 15px; letter-spacing: .02em; }
+  .field input::placeholder { color: var(--dim); }
+  .hint { font-size: 11px; color: var(--dim); margin-top: 10px; min-height: 16px; letter-spacing: .02em; }
 
-  .segmented {
-    display: flex; gap: 4px; margin-top: 12px;
-    background: rgba(255,255,255,.05); border-radius: 13px; padding: 4px;
-  }
-  .seg-btn {
-    flex: 1; padding: 10px; border-radius: 10px; border: none; background: transparent;
-    color: var(--sub); font-size: 12.5px; font-weight: 800; cursor: pointer; transition: all .2s;
-  }
-  .seg-btn.active { background: var(--grad-hot); color: #fff; box-shadow: 0 4px 16px rgba(255,46,147,.35); }
-  .add-btn {
-    margin-top: 12px; width: 100%; padding: 14px; border-radius: 14px; border: none;
-    background: var(--grad-hot); color: #fff; font-size: 14.5px; font-weight: 900;
-    cursor: pointer; transition: transform .12s; letter-spacing: .03em;
-    box-shadow: 0 8px 26px rgba(255,46,147,.4);
-  }
-  .add-btn:active { transform: scale(.97); }
+  .seg { display: flex; gap: 6px; margin-top: 14px; }
+  .seg .btn { padding: 12px 8px; font-size: 12.5px; border-radius: var(--r-sm); }
 
-  /* --- 熱門電台 --- */
-  .radio-status { font-size: 12px; color: var(--sub); margin-bottom: 13px; min-height: 18px; font-weight: 600; }
-  .grid-3 { display: flex; gap: 9px; }
-  .radio-btn {
-    flex: 1; padding: 15px 6px; border-radius: 14px; border: 1px solid var(--edge);
-    background: rgba(255,255,255,.05); color: var(--text);
-    font-size: 12px; font-weight: 800; cursor: pointer; transition: all .2s;
-    display: flex; flex-direction: column; align-items: center; gap: 5px;
+  .cta {
+    margin-top: 14px; width: 100%; padding: 15px; border-radius: var(--r-md); border: none;
+    font-size: 14.5px; font-weight: 800; letter-spacing: .04em; color: #fff; cursor: pointer;
+    background: linear-gradient(140deg, rgba(168,139,224,.32), rgba(232,143,200,.20) 55%, rgba(111,227,196,.16));
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.14), 0 0 32px rgba(168,139,224,.24);
+    transition: transform .14s, box-shadow .3s;
   }
-  .radio-btn .emoji { font-size: 19px; }
-  .radio-btn:active { transform: scale(.96); }
-  .radio-btn.kpop.active { background: linear-gradient(135deg,#B14BFF,#FF2E93); border-color: transparent; box-shadow: 0 8px 24px rgba(177,75,255,.45); }
-  .radio-btn.cpop.active { background: linear-gradient(135deg,#FF2E93,#FFB020); border-color: transparent; box-shadow: 0 8px 24px rgba(255,46,147,.4); }
-  .radio-btn.epop.active { background: linear-gradient(135deg,#00E5FF,#B14BFF); border-color: transparent; box-shadow: 0 8px 24px rgba(0,229,255,.4); }
+  .cta:hover { box-shadow: inset 0 0 0 1px rgba(255,255,255,.2), 0 0 44px rgba(168,139,224,.4); }
+  .cta:active { transform: scale(.975); }
 
-  /* --- 清單 --- */
-  .queue-empty { color: var(--dimmer); font-size: 13px; text-align: center; padding: 18px 0; }
-  .queue-item {
-    display: flex; align-items: center; gap: 12px; padding: 12px 0;
-    border-bottom: 1px solid var(--edge);
+  /* ---------- 頻道 ---------- */
+  .radio-now { font-size: 12px; color: var(--sub); margin-bottom: 14px; min-height: 18px; font-weight: 600; }
+  .radio-row { display: flex; gap: 10px; }
+  .rbtn {
+    flex: 1; padding: 16px 6px; border-radius: var(--r-md); border: none; cursor: pointer;
+    font-size: 12px; font-weight: 700; color: var(--text);
+    background: var(--glass); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    box-shadow: inset 0 0 0 1px var(--hairline);
+    display: flex; flex-direction: column; align-items: center; gap: 7px;
+    transition: transform .14s, box-shadow .3s, background .3s;
   }
-  .queue-item:last-child { border-bottom: none; }
-  .queue-num {
-    width: 27px; height: 27px; border-radius: 9px; flex-shrink: 0;
-    background: var(--grad-hot); color: #fff; font-size: 11.5px; font-weight: 900;
+  .rbtn .em { font-size: 18px; filter: saturate(.85); }
+  .rbtn:hover { background: var(--glass-hi);
+                box-shadow: inset 0 0 0 1px rgba(255,255,255,.13), 0 0 24px rgba(127,168,217,.2); }
+  .rbtn:active { transform: scale(.965); }
+  .rbtn.kpop.on { background: linear-gradient(140deg, rgba(168,139,224,.30), rgba(232,143,200,.16));
+                  box-shadow: inset 0 0 0 1px rgba(168,139,224,.4), 0 0 30px rgba(168,139,224,.3); }
+  .rbtn.cpop.on { background: linear-gradient(140deg, rgba(232,143,200,.28), rgba(240,201,138,.15));
+                  box-shadow: inset 0 0 0 1px rgba(232,143,200,.4), 0 0 30px rgba(232,143,200,.28); }
+  .rbtn.epop.on { background: linear-gradient(140deg, rgba(111,227,196,.26), rgba(127,168,217,.16));
+                  box-shadow: inset 0 0 0 1px rgba(111,227,196,.4), 0 0 30px rgba(111,227,196,.26); }
+
+  /* ---------- 清單：極淡分隔，不用線條硬切 ---------- */
+  .empty { color: var(--dim); font-size: 13px; text-align: center; padding: 20px 0; }
+  .item {
+    display: flex; align-items: center; gap: 13px; padding: 13px 10px;
+    border-radius: var(--r-sm); margin: 0 -10px; transition: background .25s;
+  }
+  .item + .item { box-shadow: inset 0 1px 0 rgba(255,255,255,.045); }
+  .item:hover { background: rgba(255,255,255,.04); }
+  .idx {
+    width: 30px; height: 30px; border-radius: 11px; flex-shrink: 0;
+    font-size: 11.5px; font-weight: 800; color: var(--taro);
+    background: rgba(168,139,224,.14);
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 12px rgba(255,46,147,.35);
   }
-  .queue-info { flex: 1; min-width: 0; }
-  .queue-title { font-size: 13.5px; font-weight: 700; overflow-wrap: anywhere; word-break: break-word; }
-  .queue-sub { font-size: 11px; color: var(--dimmer); margin-top: 3px; overflow-wrap: anywhere; }
-  .mini-btn {
-    border: 1px solid var(--edge); border-radius: 10px; width: 32px; height: 32px; flex-shrink: 0;
-    font-size: 12px; font-weight: 800; background: rgba(255,255,255,.05); color: var(--text);
-    cursor: pointer; transition: all .15s;
+  .idx.play { color: var(--mint); background: rgba(111,227,196,.13); }
+  .it-info { flex: 1; min-width: 0; }
+  .it-title { font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; word-break: break-word; }
+  .it-sub { font-size: 11px; color: var(--dim); margin-top: 4px; overflow-wrap: anywhere; }
+  .mini {
+    width: 33px; height: 33px; border-radius: 11px; flex-shrink: 0; border: none; cursor: pointer;
+    font-size: 12px; font-weight: 700; color: var(--sub);
+    background: rgba(255,255,255,.05); box-shadow: inset 0 0 0 1px var(--hairline);
+    transition: all .2s;
   }
-  .mini-btn:active { transform: scale(.9); }
-  .mini-btn.danger { background: rgba(255,77,106,.14); color: var(--danger); border-color: rgba(255,77,106,.3); }
-  .mini-btn.replay { background: rgba(0,229,255,.12); color: var(--neon-cyan); border-color: rgba(0,229,255,.3); }
-  .history-item { cursor: pointer; }
-  .history-item:active { opacity: .7; }
+  .mini:hover { color: var(--text); background: rgba(255,255,255,.09); }
+  .mini:active { transform: scale(.9); }
+  .mini.del:hover { color: var(--blush); box-shadow: inset 0 0 0 1px rgba(232,143,200,.32); }
+  .mini.again { color: var(--mint); }
+  .hist { cursor: pointer; }
 
   @media (prefers-reduced-motion: reduce) {
-    .vinyl.spinning, .stage-light, .live-dot.on i { animation: none; }
-    .vu span { transition: none; }
+    .aurora, .record.spinning, .on-air.live i { animation: none; }
+    .vu span, .ly, .deck, .tonearm { transition: none; }
+    .cursor-glow, #wave { display: none; }
   }
 </style>
 </head>
 <body>
-  <div class="stage-light sl-1"></div>
-  <div class="stage-light sl-2"></div>
+  <div class="aurora au-1"></div>
+  <div class="aurora au-2"></div>
+  <div class="aurora au-3"></div>
+  <canvas id="wave"></canvas>
   <div class="grain"></div>
-  <div class="grooves"></div>
+  <div class="cursor-glow" id="cursor-glow"></div>
 
   <div class="wrap">
-  <div class="topbar">
-    <div class="kicker">Pi3 Shield · Live Karaoke</div>
-    <h1>🎤 點歌系統</h1>
+  <div class="brand">
+    <div class="on-air" id="on-air"><i></i><span id="on-air-text">Standby</span></div>
+    <h1 class="wordmark">小樂電台</h1>
+    <div class="brand-sub">Siao Le Radio · Pi Shield</div>
   </div>
 
   <div class="layout">
     <div class="col col-left">
-      <div class="card" id="now-playing-card">
-        <div class="np-head">
-          <div class="vinyl" id="vinyl"></div>
-          <div id="now-playing" class="np-info"><div class="np-title dim">目前沒有播放中的歌曲</div></div>
+      <div class="panel" id="deck-panel">
+        <div class="deck-stage">
+          <div class="deck" id="deck">
+            <div class="deck-base"></div>
+            <div class="platter">
+              <div class="record" id="record"><div class="rec-label"></div></div>
+            </div>
+            <div class="tonearm" id="tonearm">
+              <div class="arm"></div><div class="pivot"></div><div class="head"></div>
+            </div>
+            <div class="deck-leds" id="deck-leds"><i></i><i></i></div>
+          </div>
         </div>
-        <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
-        <div class="progress-time" id="progress-time"></div>
-        <div class="np-actions">
-          <button class="btn primary" id="pause-btn" onclick="togglePause()">⏸ 暫停</button>
-          <button class="btn ghost" onclick="skip()">⏭ 切歌</button>
+
+        <div class="np" id="now-playing"><div class="np-title muted">等待點歌中</div></div>
+        <div class="bar"><i id="progress-bar"></i></div>
+        <div class="clock"><span id="clock-now">0:00</span><span id="clock-end">--:--</span></div>
+
+        <div class="row">
+          <button class="btn on" id="pause-btn" onclick="togglePause()">⏸ 暫停</button>
+          <button class="btn" onclick="skip()">⏭ 切歌</button>
         </div>
-        <div class="np-actions">
-          <button class="btn ghost" onclick="setMode('original')">🎤 原聲</button>
-          <button class="btn alt" onclick="setMode('instrumental')">🎹 伴奏</button>
+        <div class="row">
+          <button class="btn" onclick="setMode('original')">🎤 原聲</button>
+          <button class="btn on-mint" onclick="setMode('instrumental')">🎹 伴奏</button>
         </div>
       </div>
 
-      <div class="card">
-        <div class="section-title">歌詞</div>
-        <div class="lyrics-box" id="lyrics"><div class="lyric-line">目前沒有播放</div></div>
+      <div class="lyrics-float" id="lyrics"><div class="ly">目前沒有播放</div></div>
 
-        <div class="console">
-          <div class="console-head">
-            <span>音響控制</span>
-            <span class="live-dot" id="live-dot"><i></i><span id="live-text">待機中</span></span>
-          </div>
-          <div class="vu" id="vu"></div>
-          <div class="vol-row">
-            <span class="ico">🔈</span>
-            <input type="range" class="vol" id="vol" min="0" max="100" step="1" value="75"
-                   aria-label="音量" oninput="onVolInput(this.value)" onchange="onVolCommit(this.value)" />
-            <span class="ico">🔊</span>
-            <span class="vol-val" id="vol-val">75%</span>
-          </div>
+      <div class="panel">
+        <div class="label">音場<span class="tally" id="live-tag" style="display:none">LIVE</span></div>
+        <div class="vu" id="vu"></div>
+        <div class="vol-row">
+          <span class="ic">🔈</span>
+          <input type="range" class="vol" id="vol" min="0" max="100" step="1" value="75"
+                 aria-label="音量" oninput="onVolInput(this.value)" onchange="onVolCommit(this.value)" />
+          <span class="ic">🔊</span>
+          <span class="vol-num" id="vol-val">75%</span>
         </div>
       </div>
     </div>
 
     <div class="col col-right">
-      <div class="card">
-        <div class="section-title">點歌</div>
-        <div class="add-row">
-          <span class="icon">🔍</span>
+      <div class="panel">
+        <div class="label">點歌</div>
+        <div class="field">
+          <span class="ic">🔍</span>
           <input id="song-input" type="text" placeholder="輸入歌名或 YouTube 網址"
                  autocomplete="off" enterkeyhint="send" />
         </div>
-        <div class="hint-typing" id="type-hint"></div>
-        <div class="segmented">
-          <button id="mode-original" class="seg-btn active" onclick="selectMode('original')">🎤 原聲</button>
-          <button id="mode-instrumental" class="seg-btn" onclick="selectMode('instrumental')">🎹 伴奏</button>
+        <div class="hint" id="type-hint"></div>
+        <div class="seg">
+          <button id="mode-original" class="btn on" onclick="selectMode('original')">🎤 原聲</button>
+          <button id="mode-instrumental" class="btn" onclick="selectMode('instrumental')">🎹 伴奏</button>
         </div>
-        <button class="add-btn" onclick="addSong()">加入排隊</button>
+        <button class="cta" onclick="addSong()">加入排隊</button>
       </div>
 
-      <div class="card">
-        <div class="section-title">熱門電台</div>
-        <div class="radio-status" id="radio-status">目前沒有在隨機播放</div>
-        <div class="grid-3">
-          <button id="radio-kpop" class="radio-btn kpop" onclick="startRadio('kpop')"><span class="emoji">💜</span>K-pop</button>
-          <button id="radio-cpop" class="radio-btn cpop" onclick="startRadio('cpop')"><span class="emoji">🏮</span>中文流行</button>
-          <button id="radio-epop" class="radio-btn epop" onclick="startRadio('epop')"><span class="emoji">🎧</span>英文流行</button>
+      <div class="panel">
+        <div class="label">頻道</div>
+        <div class="radio-now" id="radio-status">目前沒有在隨機播放</div>
+        <div class="radio-row">
+          <button id="radio-kpop" class="rbtn kpop" onclick="startRadio('kpop')"><span class="em">💜</span>K-pop</button>
+          <button id="radio-cpop" class="rbtn cpop" onclick="startRadio('cpop')"><span class="em">🏮</span>中文流行</button>
+          <button id="radio-epop" class="rbtn epop" onclick="startRadio('epop')"><span class="em">🎧</span>英文流行</button>
         </div>
-        <button class="btn ghost" style="width:100%; margin-top:11px" onclick="stopRadio()">⏸ 暫停熱門播放</button>
+        <div class="row"><button class="btn" onclick="stopRadio()">⏸ 暫停頻道</button></div>
       </div>
 
-      <div class="card">
-        <div class="section-title">排隊列表<span class="count-pill" id="queue-count"></span></div>
-        <div id="queue-list"><div class="queue-empty">排隊中沒有歌曲</div></div>
+      <div class="panel">
+        <div class="label">待播<span class="tally" id="queue-count"></span></div>
+        <div id="queue-list"><div class="empty">排隊中沒有歌曲</div></div>
       </div>
 
-      <div class="card">
-        <div class="section-title">已播歌曲<span class="count-pill" id="history-count"></span></div>
-        <div id="history-list"><div class="queue-empty">還沒有播放紀錄</div></div>
+      <div class="panel">
+        <div class="label">播過<span class="tally" id="history-count"></span></div>
+        <div id="history-list"><div class="empty">還沒有播放紀錄</div></div>
       </div>
     </div>
   </div>
   </div>
 
 <script>
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let selectedMode = 'original';
 let currentLyrics = null;
 let currentLyricsTitle = null;
+let vuPlaying = false;
 
 function selectMode(mode) {
   selectedMode = mode;
-  document.getElementById('mode-original').classList.toggle('active', mode === 'original');
-  document.getElementById('mode-instrumental').classList.toggle('active', mode === 'instrumental');
+  document.getElementById('mode-original').classList.toggle('on', mode === 'original');
+  document.getElementById('mode-instrumental').classList.toggle('on', mode === 'instrumental');
 }
 
-// 中文輸入法友善的 Enter：組字中的 Enter 是「選字」不是「送出」
+/* ---------- 滑鼠互動 ---------- */
+function initPointer() {
+  if (reduceMotion) return;
+  const glow = document.getElementById('cursor-glow');
+  const deck = document.getElementById('deck');
+  let tx = window.innerWidth / 2, ty = window.innerHeight / 3;
+  let cx = tx, cy = ty, shown = false;
+
+  window.addEventListener('pointermove', function (e) {
+    if (e.pointerType === 'touch') return;
+    tx = e.clientX; ty = e.clientY;
+    if (!shown) { shown = true; glow.style.opacity = '1'; }
+    const p = e.target && e.target.closest ? e.target.closest('.panel') : null;
+    if (p) {
+      const r = p.getBoundingClientRect();
+      p.style.setProperty('--mx', (e.clientX - r.left) + 'px');
+      p.style.setProperty('--my', (e.clientY - r.top) + 'px');
+    }
+    const nx = (e.clientX / window.innerWidth - 0.5) * 2;
+    const ny = (e.clientY / window.innerHeight - 0.5) * 2;
+    deck.style.setProperty('--ty', (nx * 7).toFixed(2) + 'deg');
+    deck.style.setProperty('--tz', (-ny * 5).toFixed(2) + 'deg');
+  }, {passive: true});
+
+  document.addEventListener('pointerleave', function () { glow.style.opacity = '0'; shown = false; });
+
+  (function follow() {
+    cx += (tx - cx) * 0.09; cy += (ty - cy) * 0.09;
+    glow.style.transform = 'translate3d(' + cx.toFixed(1) + 'px,' + cy.toFixed(1) + 'px,0)';
+    requestAnimationFrame(follow);
+  })();
+
+  window.addEventListener('pointerdown', function (e) {
+    const r = document.createElement('div');
+    r.className = 'ripple';
+    r.style.left = e.clientX + 'px';
+    r.style.top = e.clientY + 'px';
+    document.body.appendChild(r);
+    setTimeout(function () { r.remove(); }, 800);
+  }, {passive: true});
+}
+
+/* ---------- 背景聲波：播放時振幅變大 ---------- */
+function initWave() {
+  if (reduceMotion) return;
+  const cv = document.getElementById('wave');
+  const ctx = cv.getContext('2d');
+  const COLORS = ['rgba(127,168,217,.55)', 'rgba(168,139,224,.50)', 'rgba(111,227,196,.34)'];
+  let w = 0, h = 0, t = 0, amp = 0.22;
+
+  function resize() {
+    // 刻意用低解析度畫布再拉滿版：外層有 blur，看不出來，但省很多效能
+    w = cv.width = Math.max(320, Math.min(760, Math.floor(window.innerWidth / 2)));
+    h = cv.height = 190;
+  }
+  resize();
+  window.addEventListener('resize', resize, {passive: true});
+
+  (function draw() {
+    const target = vuPlaying ? 1 : 0.22;
+    amp += (target - amp) * 0.04;
+    ctx.clearRect(0, 0, w, h);
+    ctx.lineWidth = 2.4;
+    for (let k = 0; k < 3; k++) {
+      ctx.beginPath();
+      ctx.strokeStyle = COLORS[k];
+      const f = 0.011 + k * 0.006, sp = 0.9 + k * 0.5, a = (26 - k * 5) * amp;
+      for (let x = 0; x <= w; x += 4) {
+        const y = h * (0.5 + k * 0.09)
+                + Math.sin(x * f + t * sp) * a
+                + Math.sin(x * f * 2.3 + t * sp * 1.6) * a * 0.4;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    t += 0.02;
+    requestAnimationFrame(draw);
+  })();
+}
+
+/* ---------- 中文輸入法友善的 Enter ---------- */
 let composing = false, justComposed = false;
 function initInput() {
   const input = document.getElementById('song-input');
@@ -818,6 +990,7 @@ function initInput() {
   });
 }
 
+/* ---------- 音量 ---------- */
 let volTimer = null, volDragging = false;
 function onVolInput(v) {
   volDragging = true;
@@ -833,33 +1006,40 @@ function sendVolume(v) {
   }).finally(function () { setTimeout(function () { volDragging = false; }, 400); });
 }
 
-const VU_BARS = 32;
-let vuPlaying = false;
+/* ---------- VU ---------- */
+const VU_BARS = 34;
 function initVU() {
   let html = '';
   for (let i = 0; i < VU_BARS; i++) html += '<span></span>';
   document.getElementById('vu').innerHTML = html;
-  setInterval(tickVU, 130);
+  setInterval(tickVU, 140);
 }
 function tickVU() {
   const vu = document.getElementById('vu');
   const bars = vu.children;
   for (let i = 0; i < bars.length; i++) {
-    let h = 6;
+    let hh = 8;
     if (vuPlaying) {
       const centre = 1 - Math.abs(i - (VU_BARS - 1) / 2) / ((VU_BARS - 1) / 2);
-      h = 10 + Math.random() * 82 * (0.3 + centre * 0.7);
+      hh = 12 + Math.random() * 78 * (0.28 + centre * 0.72);
     }
-    bars[i].style.height = h.toFixed(0) + '%';
+    bars[i].style.height = hh.toFixed(0) + '%';
   }
-  vu.classList.toggle('playing', vuPlaying);
+  vu.classList.toggle('on', vuPlaying);
 }
 
-function setLive(playing, title) {
+function setLive(playing, hasSong) {
   vuPlaying = !!playing;
-  const dot = document.getElementById('live-dot');
-  dot.classList.toggle('on', !!playing);
-  document.getElementById('live-text').textContent = playing ? '播放中' : (title ? '已暫停' : '待機中');
+  const air = document.getElementById('on-air');
+  air.classList.toggle('live', !!playing);
+  document.getElementById('on-air-text').textContent =
+    playing ? 'On Air' : (hasSong ? 'Paused' : 'Standby');
+  const tag = document.getElementById('live-tag');
+  tag.style.display = playing ? '' : 'none';
+  document.getElementById('tonearm').classList.toggle('on', !!playing);
+  const leds = document.getElementById('deck-leds').children;
+  leds[0].classList.toggle('on', !!playing);
+  leds[1].classList.toggle('on', !!hasSong);
 }
 function setCount(id, n) {
   const el = document.getElementById(id);
@@ -879,29 +1059,33 @@ function fmtTime(sec) {
 function renderNowPlaying(data) {
   const np = data.now_playing;
   const el = document.getElementById('now-playing');
-  const vinyl = document.getElementById('vinyl');
+  const record = document.getElementById('record');
   const pauseBtn = document.getElementById('pause-btn');
   if (!np) {
-    el.innerHTML = '<div class="np-title dim">目前沒有播放中的歌曲</div>';
+    el.innerHTML = '<div class="np-title muted">等待點歌中</div>';
     document.getElementById('progress-bar').style.width = '0%';
-    document.getElementById('progress-time').textContent = '';
-    vinyl.classList.remove('spinning');
+    document.getElementById('clock-now').textContent = '0:00';
+    document.getElementById('clock-end').textContent = '--:--';
+    record.classList.remove('spinning');
     pauseBtn.textContent = '⏸ 暫停';
-    pauseBtn.classList.remove('resume');
-    setLive(false, null);
+    pauseBtn.classList.remove('on-mint');
+    pauseBtn.classList.add('on');
+    setLive(false, false);
     return;
   }
-  vinyl.classList.toggle('spinning', !data.paused);
+  record.classList.toggle('spinning', !data.paused);
   pauseBtn.textContent = data.paused ? '▶️ 繼續' : '⏸ 暫停';
-  pauseBtn.classList.toggle('resume', !!data.paused);
-  setLive(!data.paused, np.title);
-  const modeLabel = np.mode === 'instrumental' ? '伴奏版' : '原聲';
-  const pillClass = np.mode === 'instrumental' ? 'pill alt' : 'pill';
+  pauseBtn.classList.toggle('on-mint', !!data.paused);
+  pauseBtn.classList.toggle('on', !data.paused);
+  setLive(!data.paused, true);
+  const isInst = np.mode === 'instrumental';
   el.innerHTML = '<div class="np-title">' + escapeHtml(np.title) + '</div>' +
-    '<div class="np-sub"><span class="' + pillClass + '">' + modeLabel + '</span>' + escapeHtml(np.requester) + '</div>';
+    '<div class="np-sub"><span class="chip' + (isInst ? ' alt' : '') + '">' +
+    (isInst ? '伴奏版' : '原聲') + '</span><span>' + escapeHtml(np.requester) + '</span></div>';
   const pct = data.duration ? Math.min(100, (data.time_pos / data.duration) * 100) : 0;
   document.getElementById('progress-bar').style.width = pct + '%';
-  document.getElementById('progress-time').textContent = fmtTime(data.time_pos) + ' / ' + fmtTime(data.duration);
+  document.getElementById('clock-now').textContent = fmtTime(data.time_pos);
+  document.getElementById('clock-end').textContent = fmtTime(data.duration);
 }
 
 function renderVolume(vol) {
@@ -915,7 +1099,7 @@ function renderVolume(vol) {
 function renderLyrics(lyrics, timePos) {
   const el = document.getElementById('lyrics');
   if (!lyrics || lyrics.length === 0) {
-    el.innerHTML = '<div class="lyric-line">（沒有找到歌詞）</div>';
+    el.innerHTML = '<div class="ly">（沒有找到歌詞）</div>';
     return;
   }
   let idx = -1;
@@ -925,8 +1109,8 @@ function renderLyrics(lyrics, timePos) {
   const start = Math.max(0, idx - 2), end = Math.min(lyrics.length, idx + 4);
   let html = '';
   for (let i = start; i < end; i++) {
-    html += '<div class="' + (i === idx ? 'lyric-line current' : 'lyric-line') + '">' +
-            escapeHtml(lyrics[i].text) + '</div>';
+    const cls = i === idx ? 'ly cur' : (Math.abs(i - idx) === 1 ? 'ly near' : 'ly');
+    html += '<div class="' + cls + '">' + escapeHtml(lyrics[i].text) + '</div>';
   }
   el.innerHTML = html;
 }
@@ -935,18 +1119,18 @@ function renderQueue(queue) {
   const el = document.getElementById('queue-list');
   setCount('queue-count', queue ? queue.length : 0);
   if (!queue || queue.length === 0) {
-    el.innerHTML = '<div class="queue-empty">排隊中沒有歌曲</div>';
+    el.innerHTML = '<div class="empty">排隊中沒有歌曲</div>';
     return;
   }
   let html = '';
   queue.forEach(function (s, i) {
-    const modeLabel = s.mode === 'instrumental' ? '伴奏' : '原聲';
-    html += '<div class="queue-item">' +
-      '<div class="queue-num">' + (i + 1) + '</div>' +
-      '<div class="queue-info"><div class="queue-title">' + escapeHtml(s.query) + '</div>' +
-      '<div class="queue-sub">' + modeLabel + ' · ' + escapeHtml(s.requester) + '</div></div>' +
-      '<button class="mini-btn" onclick="priority(\\'' + s.id + '\\')">⬆</button>' +
-      '<button class="mini-btn danger" onclick="removeSong(\\'' + s.id + '\\')">✕</button>' +
+    html += '<div class="item">' +
+      '<div class="idx">' + (i + 1) + '</div>' +
+      '<div class="it-info"><div class="it-title">' + escapeHtml(s.query) + '</div>' +
+      '<div class="it-sub">' + (s.mode === 'instrumental' ? '伴奏' : '原聲') + ' · ' +
+      escapeHtml(s.requester) + '</div></div>' +
+      '<button class="mini" title="插隊" onclick="priority(\\'' + s.id + '\\')">⬆</button>' +
+      '<button class="mini del" title="移除" onclick="removeSong(\\'' + s.id + '\\')">✕</button>' +
       '</div>';
   });
   el.innerHTML = html;
@@ -956,17 +1140,18 @@ function renderHistory(history) {
   const el = document.getElementById('history-list');
   setCount('history-count', history ? history.length : 0);
   if (!history || history.length === 0) {
-    el.innerHTML = '<div class="queue-empty">還沒有播放紀錄</div>';
+    el.innerHTML = '<div class="empty">還沒有播放紀錄</div>';
     return;
   }
   let html = '';
   history.forEach(function (h) {
-    const modeLabel = h.mode === 'instrumental' ? '伴奏' : '原聲';
-    html += '<div class="queue-item history-item" onclick="replaySong(\\'' + h.url + '\\', \\'' + h.mode + '\\')">' +
-      '<div class="queue-num">♪</div>' +
-      '<div class="queue-info"><div class="queue-title">' + escapeHtml(h.title) + '</div>' +
-      '<div class="queue-sub">' + modeLabel + ' · ' + escapeHtml(h.requester) + '</div></div>' +
-      '<button class="mini-btn replay" onclick="event.stopPropagation(); replaySong(\\'' + h.url + '\\', \\'' + h.mode + '\\')">🔁</button>' +
+    html += '<div class="item hist" onclick="replaySong(\\'' + h.url + '\\', \\'' + h.mode + '\\')">' +
+      '<div class="idx play">♪</div>' +
+      '<div class="it-info"><div class="it-title">' + escapeHtml(h.title) + '</div>' +
+      '<div class="it-sub">' + (h.mode === 'instrumental' ? '伴奏' : '原聲') + ' · ' +
+      escapeHtml(h.requester) + '</div></div>' +
+      '<button class="mini again" title="再播一次" onclick="event.stopPropagation(); replaySong(\\'' +
+      h.url + '\\', \\'' + h.mode + '\\')">🔁</button>' +
       '</div>';
   });
   el.innerHTML = html;
@@ -984,7 +1169,7 @@ function renderRadio(category) {
   document.getElementById('radio-status').textContent =
     category ? ('🔀 隨機播放中：' + RADIO_LABELS[category]) : '目前沒有在隨機播放';
   ['kpop', 'cpop', 'epop'].forEach(function (c) {
-    document.getElementById('radio-' + c).classList.toggle('active', c === category);
+    document.getElementById('radio-' + c).classList.toggle('on', c === category);
   });
 }
 
@@ -1003,7 +1188,7 @@ function poll() {
       renderLyrics(currentLyrics, data.time_pos);
     } else {
       currentLyrics = null; currentLyricsTitle = null;
-      document.getElementById('lyrics').innerHTML = '<div class="lyric-line">目前沒有播放</div>';
+      document.getElementById('lyrics').innerHTML = '<div class="ly">目前沒有播放</div>';
     }
   }).catch(function () {});
 }
@@ -1044,9 +1229,10 @@ function priority(id) {
 function skip() { fetch('/api/karaoke/skip', {method: 'POST'}).then(poll); }
 function togglePause() {
   const btn = document.getElementById('pause-btn');
-  const willPause = !btn.classList.contains('resume');
+  const willPause = !btn.classList.contains('on-mint');
   btn.textContent = willPause ? '▶️ 繼續' : '⏸ 暫停';
-  btn.classList.toggle('resume', willPause);
+  btn.classList.toggle('on-mint', willPause);
+  btn.classList.toggle('on', !willPause);
   fetch('/api/karaoke/pause', {method: 'POST'}).then(poll).catch(poll);
 }
 function setMode(mode) {
@@ -1056,6 +1242,8 @@ function setMode(mode) {
   }).then(poll);
 }
 
+initPointer();
+initWave();
 initInput();
 initVU();
 poll();
@@ -1070,7 +1258,7 @@ DISPLAY_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>🎤 卡拉OK大螢幕</title>
+<title>小樂電台 · 大螢幕</title>
 <style>
   :root {
     --bg-a: #0a0818; --bg-b: #160e2e; --bg-c: #0c1622;
@@ -1284,7 +1472,7 @@ MANUAL_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>點歌系統操作手冊</title>
+<title>小樂電台 操作手冊</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -1308,7 +1496,7 @@ MANUAL_HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <h1>🎤 點歌系統操作手冊</h1>
+  <h1>🎤 小樂電台 操作手冊</h1>
   <p class="sub">在 LINE 聊天室直接傳文字指令，或打開 <a href="/karaoke">點歌網頁</a> 用按鈕操作，兩邊是同一份排隊，互相同步。</p>
 
   <h2>點歌</h2>
@@ -1571,7 +1759,7 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
     if '小樂' in key and '點歌' in key:
         if not base_url:
             return '點歌頁面連結目前無法產生'
-        return f"🎤 歡迎使用點歌系統！\n點歌頁面：{karaoke_url}\n操作手冊：{manual_url}\n\n快速上手：直接傳「點歌 歌名」就能加入排隊囉！"
+        return f"🎤 歡迎收聽小樂電台！\n點歌頁面：{karaoke_url}\n操作手冊：{manual_url}\n\n快速上手：直接傳「點歌 歌名」就能加入排隊囉！"
     # ---- 常點歌曲（快捷點歌）----
     # 沿用推薦功能那套「回數字選歌」的機制：把清單暫存起來，
     # 使用者回 1~5 就直接點。**不另外發明一套互動方式**，
@@ -1665,7 +1853,7 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
         shield.relay_off()
         return '繼電器 關閉'
 
-    # ---------- 點歌系統 ----------
+    # ---------- 小樂電台 ----------
     if key.startswith('點歌') or key.startswith('播放'):
         query = key[2:].strip()
         if not query:

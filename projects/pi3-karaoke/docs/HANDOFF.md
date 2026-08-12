@@ -1370,3 +1370,103 @@ LINE 指令也走真實 webhook 測過，暫停/繼續狀態都正確切換。
 5. `/display` 大螢幕頁 HTTP 200
 6. 把線上頁面抓下來、`fetch` 換成假資料（有歌在播、3 首排隊含一條超長網址、
    3 首已播、電台開著），發布成 Artifact 讓使用者直接看填滿的樣子
+
+---
+
+# 2026-08-12（同日第二次改版）小樂電台：3D 唱盤 + 滑鼠互動
+
+## 0. 改名
+
+`點歌系統` → **`小樂電台`**，全站統一（網頁 `<title>` 與品牌字、大螢幕頁、
+操作手冊、LINE 選單文字、加好友歡迎詞）。`grep 點歌系統` 應該回傳 0 筆。
+
+## 1. 方向：Y2K 霓虹賽博 × 輕潮簡約，兩者合一
+
+使用者給了兩個風格並要求「結合」。實際的合法：
+**A 風格當骨架（氛圍、光暈、賽博感），B 風格當肌理（低飽和、大圓角、乾淨）。**
+
+前一版（同日早上的霓虹版）被退回的點是**太刺眼、太多實心色塊**。
+這版三條硬規則：
+
+1. **顏色靠「透」不靠「亮」**——低飽和光暈穿過毛玻璃透上來，
+   不用 `#FF2E93` 那種高飽和實心漸層
+2. **按鈕一律毛玻璃**——啟用態是「染色的霧」
+   （`rgba(...,.30)` 漸層 + inset 描邊 + 外發光），**沒有任何實心彩色按鈕**
+3. **不用邊框切版**——面板沒有 `border`，靠 `box-shadow` 光暈和
+   `::after` 的漸層描邊界定範圍；清單項目之間用 `inset 0 1px 0 rgba(255,255,255,.045)`
+   而不是實線
+
+## 2. 色票（全部低飽和）
+
+    --ink:   #0B0D14   /* 深炭灰帶藍，不是純黑 */
+    --mist:  #7FA8D9   /* 霧藍 */
+    --taro:  #A88BE0   /* 香芋紫 */
+    --mint:  #6FE3C4   /* 淺薄荷 */
+    --blush: #E68FC8   /* 粉紫 */
+    --sun:   #F0C98A   /* 暖砂，只給 VU 峰值 */
+
+圓角提升到 `--r-lg: 30px` / `--r-md: 20px`，所有元件圓角化（B 風格要求）。
+
+## 3. 3D 唱盤（`.deck`）
+
+純 CSS 3D，沒有用任何 3D 函式庫：
+
+    .deck-stage { perspective: 1100px; perspective-origin: 50% 26%; }
+    .deck       { transform-style: preserve-3d;
+                  transform: rotateX(53deg) rotateZ(calc(-14deg + var(--tz))) rotateY(var(--ty)); }
+
+- **盤體厚度**用堆疊 `box-shadow` 偽造：`0 2px 0` / `0 4px 0` … 一路到 `0 14px 0`，
+  每層顏色漸暗，看起來就是一塊有厚度的板子
+- **唱片**：`repeating-radial-gradient` 溝紋疊 `conic-gradient` 反光，
+  `.spinning` 時 2.6s 轉一圈；標籤是香芋紫→粉紫→霧藍漸層 + 中心軸孔
+- **唱針** `.tonearm`：`transform-origin` 設在支點上，
+  待機 `rotate(34deg)`、播放時 `rotate(64deg)` 擺進盤面，0.9s 過渡
+  ——**這個動作綁在播放狀態上，不是裝飾**
+- **盤面兩顆 LED**：左＝播放中（薄荷）、右＝有歌（粉紫）
+
+## 4. 滑鼠互動（`initPointer()`）
+
+| 效果 | 做法 |
+|---|---|
+| 游標光暈 | 460px 徑向漸層，`requestAnimationFrame` 以 `lerp 0.09` 緩動跟隨，不是硬跟 |
+| 面板內高光 | 每個 `.panel` 記錄游標相對座標到 `--mx/--my`，`::before` 用 `radial-gradient(340px circle at var(--mx) var(--my))` |
+| 唱盤傾斜 | 游標的正規化座標驅動 `--ty`（±7°）/`--tz`（±5°），疊在基礎 `rotateX(53deg)` 上 |
+| 點擊漣漪 | `pointerdown` 生成一個 `.ripple` div，0.75s 擴散後 `remove()` |
+
+**觸控要跳過**：`if (e.pointerType === 'touch') return;`——
+手機上 `pointermove` 會在滑動時狂觸發，而且游標光暈在觸控裝置上沒有意義。
+
+## 5. 背景聲波（`initWave()`）
+
+`<canvas id="wave">` 疊三條相位不同的正弦波，外層 `filter: blur(16px)`。
+
+**效能重點**：畫布內部解析度刻意壓到 `min(760, innerWidth/2) × 190`，
+再用 CSS 拉滿版。反正外面有 16px 模糊，看不出來，但省下大量填充率
+——這頁是樹莓派服務、手機瀏覽為主，不能用全解析度 canvas。
+
+振幅 `amp` 用 `amp += (target - amp) * 0.04` 平滑趨近，
+播放中 target=1、待機 target=0.22，所以**波形會隨播放狀態呼吸**。
+
+## 6. 歌詞：半透浮層
+
+`.lyrics-float` 刻意**不是** `.panel`——沒有毛玻璃底、沒有描邊，
+只有一層 `radial-gradient(120% 100% at 50% 0%, rgba(255,255,255,.05), transparent 72%)`。
+目前這句 `.ly.cur` 是全頁最亮的元素，前後一句 `.ly.near` 用中階灰，其餘最暗，
+形成三段式的注意力梯度。
+
+## 7. 保留沒動的東西
+
+改版只換視覺，以下全部原樣並已驗證：中文輸入法 Enter 保護、長網址不撐破版面、
+音量防抖與拖曳保護、暫停樂觀更新、5 個響應式斷點、所有 API 路徑與 DOM id、
+`prefers-reduced-motion`（會關掉極光/唱片/聲波/游標光暈）。
+
+## 8. 驗證
+
+1. `python3 -m py_compile line_control.py`
+2. 用 `ast` 取出 `KARAOKE_HTML` 的**執行期字串**再檢查 17 項
+   （3D 唱盤、游標互動、聲波、低飽和色票、**確認舊的 `#FF2E93`/`#00E5FF` 已完全移除**、
+   JS 跳脫、div 平衡…）——不要用 grep 原始檔判斷跳脫，會錯
+3. 部署後 `curl http://raspberrypi.local:8000/{karaoke,display,manual}` 三頁都 200，
+   且 `/karaoke` 內容含「小樂電台」
+4. `/api/karaoke/status` 仍正常
+5. 發布假資料版 Artifact 讓使用者實際用滑鼠試互動
