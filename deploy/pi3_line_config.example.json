@@ -9,6 +9,10 @@
   "nlu_token": "<openclaw gateway token>",
   "nlu_enabled": true,
 
+  "_group": "群組安靜模式。群組/多人聊天室裡，訊息必須以喚醒詞開頭才理會，其餘完全不回覆。一對一聊天不受影響。設 false 則所有訊息都會回（原本的行為，在群組裡會很吵）。",
+  "wake_words": ["小樂點歌台", "小樂"],
+  "group_requires_wake": true,
+
   "_stt": "語音轉文字。指向 Mac 上的 mlx-whisper 服務，語音點歌與麥克風語音控制都靠它。",
   "stt_base_url": "http://YOUR-MAC.local:8770",
   "stt_enabled": true

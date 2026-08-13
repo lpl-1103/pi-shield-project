@@ -18,6 +18,10 @@ Type=simple
 User=lpl1103
 WorkingDirectory=/home/lpl1103
 ExecStart=/usr/bin/python3 /home/lpl1103/line_control.py
+# 沒有這行的話，程式裡的 print() 會被 Python 的 stdout 緩衝卡住，
+# journal 裡只看得到 Flask 的存取日誌（那條走 stderr 不受影響），
+# 自己印的診斷訊息要等緩衝區滿了才出現——除錯時會誤判成「沒有執行到」。
+Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=5
 

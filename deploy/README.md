@@ -93,6 +93,19 @@ deploy/deploy.sh --check    # 只比對差異
 另外設了 tty1 自動登入（`/etc/systemd/system/getty@tty1.service.d/autologin.conf`），
 這樣 `/display` 大螢幕那條不用有人去打密碼。
 
+## 群組行為的回歸測試
+
+`deploy/test_group_gate.py` 對**真正在跑的服務**送簽章正確的假 webhook，
+驗證群組閘門（有無喚醒詞、@全體成員、單字元指令、一對一不受影響共 8 種情境）。
+
+```bash
+scp deploy/test_group_gate.py $PI_HOST:/tmp/ && ssh $PI_HOST 'python3 /tmp/test_group_gate.py'
+```
+
+用「排隊」當測試指令（唯讀，不會真的點歌）。判斷「有沒有回覆」是撈 journal 裡
+`line_reply` 對假 replyToken 失敗時印的那行——**所以 unit 一定要有
+`Environment=PYTHONUNBUFFERED=1`**，否則 print 會被緩衝，測試會全部誤判成「沒回覆」。
+
 ## 驗證部署有沒有真的成功
 
 **只看 HTTP 狀態碼會被騙。** ngrok 網域被別台機器搶走時，公開網址一樣回 200，

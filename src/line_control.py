@@ -39,6 +39,51 @@ CHANNEL_ACCESS_TOKEN = _config['channel_access_token']
 
 LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply'
 
+# ---------- 群組安靜模式 ----------
+# 問題：機器人原本對「每一則」訊息都會回覆（比對不到指令就回「不認識的指令」），
+# 在群組裡等於每個人講話它都插嘴。而且單字元指令（`1` = 開燈泡）跟
+# 「@任何稱呼 歌名」這兩條規則，在群組裡會被日常對話跟 @全體成員 誤觸。
+#
+# 做法：群組／多人聊天室裡，訊息必須以喚醒詞開頭才理會，其餘**完全不回覆**
+# （連錯誤訊息都不回，才不會洗版）。一對一聊天不受影響——那裡只有使用者跟
+# 機器人兩個，回覆每則訊息是預期行為，要求喚醒詞只會變難用。
+# 長的排前面：LINE 提及會展開成完整顯示名稱（@小樂點歌台），
+# 若先比對到「小樂」會只切掉前兩個字，剩下「點歌台 ...」變成垃圾。
+WAKE_WORDS = sorted(
+    _config.get('wake_words') or ['小樂點歌台', '小樂'],
+    key=len, reverse=True)
+GROUP_REQUIRES_WAKE = _config.get('group_requires_wake', True)
+
+# 喚醒詞後面常見的標點，一併吃掉：「小樂，點歌 稻香」要能用
+_WAKE_TRAIL = ' \t,，。、!！?？:：~～'
+
+
+def strip_wake_word(text: str):
+    """開頭是喚醒詞就回傳去掉喚醒詞的剩餘內容，不是則回傳 None。
+
+    接受的寫法：「小樂 點歌 稻香」「小樂，點歌 稻香」
+    「@小樂點歌台 點歌 稻香」（LINE 會把提及展開成 @顯示名稱）。
+    """
+    s = (text or '').strip()
+    if s.startswith('@'):
+        s = s[1:].lstrip()
+    for w in WAKE_WORDS:
+        if s.startswith(w):
+            return s[len(w):].lstrip(_WAKE_TRAIL)
+    return None
+
+
+def mentions_everyone(message: dict) -> bool:
+    """LINE 的「@全體成員」在 mentionees 裡 type 是 'all'。
+
+    這種訊息一律當成沒看到——群組公告不該觸發點歌，而且它展開後的文字
+    長得就像「@All 大家好」，會被舊的 @ 規則當成點「大家好」這首歌。
+    """
+    for m in (message.get('mention') or {}).get('mentionees') or []:
+        if m.get('type') == 'all':
+            return True
+    return False
+
 # 網頁面板用的數字 -> 音符對照（跟鍵盤版的 q/w/e/r/t 字母對照分開，互不影響）
 NOTE_NUMBER_MAP = {
     '1': 'do', '2': 're', '3': 'mi', '4': 'fa',
@@ -68,6 +113,9 @@ MENU_TEXT = (
     "  熱門排行           = 全場最常被點的歌\n"\
     "  大螢幕 = 傳送接電視/顯示器用的大字歌詞頁面連結\n"
     "  小樂小樂，我要點歌 = 傳送點歌頁面連結+操作手冊\n"
+    "  ⚠ 群組裡必須以「小樂」開頭才會理會，例如「小樂 點歌 稻香」，\n"
+    "     其他訊息一律不回應（避免洗版），@全體成員 也不會觸發任何動作。\n"
+    "     一對一聊天不受影響，可以直接下指令。\n"
     "  以上都比對不到的話，也可以直接用口語講（例如「我想聽周杰倫的稻香」\n"
     "  「可以跳過這首嗎」），機器人會試著聽懂（需要本機 AI 服務有開）\n"
     "  直接傳「語音訊息」也可以點歌，不用打字，機器人會轉成文字再照上面的規則處理\n"\
@@ -1854,17 +1902,27 @@ def _download_line_audio(message_id: str) -> bytes | None:
     return None
 
 
-def _handle_voice_message(message_id: str, base_url: str, user_id) -> str:
+def _handle_voice_message(message_id: str, base_url: str, user_id, require_wake: bool = False):
     """語音訊息走的路：下載音檔 -> 本機 Whisper 轉文字 -> 丟回 handle_command()
     走一般文字指令（含既有規則跟 NLU fallback），跟打字點歌是同一套邏輯，
     只是多了語音轉文字這一步。回覆會附上聽到的內容，方便使用者發現辨識錯誤。"""
     audio_bytes = _download_line_audio(message_id)
     if not audio_bytes:
-        return '語音訊息下載失敗，麻煩再傳一次'
+        return None if require_wake else '語音訊息下載失敗，麻煩再傳一次'
     text = stt.transcribe(audio_bytes)
     if not text:
-        return '沒聽清楚你說的話，可以再說一次，或直接打字'
+        return None if require_wake else '沒聽清楚你說的話，可以再說一次，或直接打字'
+    if require_wake:
+        # 群組裡的語音也要喊喚醒詞，否則群組內的閒聊語音都會被辨識+回覆
+        stripped = strip_wake_word(text)
+        if stripped is None:
+            return None
+        if not stripped:
+            return f'我在～說「{WAKE_WORDS[0]} 點歌 歌名」就能點歌'
+        text = stripped
     action_reply = handle_command(text, base_url=base_url, user_id=user_id)
+    if action_reply is None:
+        return None
     return f'🎤 聽到你說：「{text}」\n\n{action_reply}'
 
 
@@ -2085,7 +2143,12 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
         return _queue_song_from_text(query, user_id)
     if key.startswith('@'):
         rest = key[1:].strip()
-        parts = rest.split(None, 1)  # 第一個空白前是「叫誰」，不檢查內容，任何稱呼都接受
+        parts = rest.split(None, 1)
+        target = parts[0] if parts else ''
+        # 只接受「叫到自己」的提及。原本這裡任何稱呼都接受，結果群組裡的
+        # 「@全體成員」「@某個同事」都會被當成點歌指令。
+        if not any(w in target for w in WAKE_WORDS):
+            return None
         if len(parts) == 2 and parts[1].strip():
             return _queue_song_from_text(parts[1], user_id)
         hint = f"\n點歌頁面：{karaoke_url}" if karaoke_url else ''
@@ -2191,7 +2254,11 @@ def callback():
     for event in payload.get('events', []):
         reply_token = event.get('replyToken')
         event_type = event.get('type')
-        user_id = event.get('source', {}).get('userId')
+        source = event.get('source', {})
+        user_id = source.get('userId')
+        # group = 群組，room = 多人聊天室；user = 一對一
+        in_group = source.get('type') in ('group', 'room')
+        gate = in_group and GROUP_REQUIRES_WAKE
 
         if event_type == 'follow':
             if reply_token:
@@ -2202,11 +2269,31 @@ def callback():
             continue
         message = event.get('message', {})
         msg_type = message.get('type')
+        # 「@全體成員」一律當成沒看到，不分群組或一對一。
+        # 這種訊息展開後長得像「@All 大家好」，會被當成點歌。
+        if mentions_everyone(message):
+            continue
+
         if msg_type == 'text':
-            reply_text = handle_command(message.get('text', ''), base_url=base_url, user_id=user_id)
+            text = message.get('text', '')
+            if gate:
+                stripped = strip_wake_word(text)
+                if stripped is None:
+                    continue          # 群組閒聊：完全不回，連錯誤訊息都不回
+                if not stripped:
+                    reply_text = f'我在～說「{WAKE_WORDS[0]} 點歌 歌名」就能點歌'
+                    if reply_token:
+                        line_reply(reply_token, reply_text)
+                    continue
+                text = stripped
+            reply_text = handle_command(text, base_url=base_url, user_id=user_id)
         elif msg_type == 'audio':
-            reply_text = _handle_voice_message(message.get('id'), base_url=base_url, user_id=user_id)
+            reply_text = _handle_voice_message(
+                message.get('id'), base_url=base_url, user_id=user_id, require_wake=gate)
         else:
+            continue
+        # handle_command 回 None 代表「這則刻意不回應」
+        if reply_text is None:
             continue
         if reply_token:
             line_reply(reply_token, reply_text)
@@ -2257,6 +2344,8 @@ def api_voice():
         return jsonify({'status': 'error', 'message': 'empty text'}), 400
     base_url = f"https://{request.host}"
     reply = handle_command(text, base_url=base_url, user_id=None)
+    if reply is None:
+        return jsonify({'status': 'ignored', 'reply': ''})
     return jsonify({'status': 'ok', 'reply': reply})
 
 
