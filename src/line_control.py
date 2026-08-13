@@ -73,6 +73,29 @@ def strip_wake_word(text: str):
     return None
 
 
+# ---------- 緊急停用開關 ----------
+# 用途：萬一機器人又出現「一直插嘴／亂回應」這類失控狀況，要能**直接從 LINE 關掉**，
+# 不用 SSH 進樹莓派。狀態存成檔案而不是記憶體變數，服務重啟後仍然維持停用——
+# 否則失控時它自己重啟一次就又開始吵。
+MUTE_FLAG = os.path.expanduser('~/.line_bot_muted')
+_MUTE_WORDS = ('停用', '閉嘴', '安靜', '休眠', '停止回覆', 'mute')
+_RESUME_WORDS = ('啟用', '恢復', '醒來', '開始回覆', 'unmute')
+
+
+def is_muted() -> bool:
+    return os.path.exists(MUTE_FLAG)
+
+
+def set_muted(muted: bool) -> None:
+    if muted:
+        open(MUTE_FLAG, 'w').close()
+        return
+    try:
+        os.remove(MUTE_FLAG)
+    except FileNotFoundError:
+        pass
+
+
 def mentions_everyone(message: dict) -> bool:
     """LINE 的「@全體成員」在 mentionees 裡 type 是 'all'。
 
@@ -96,7 +119,8 @@ MENU_TEXT = (
     "      4=燈泡1閃爍 5=燈泡2閃爍 6=一起閃爍  0=全部熄滅\n"
     "蜂鳴器: q=Do w=Re e=Mi r=Fa t=So  p=播放粉刷匠\n"
     "繼電器: o=開啟 k=關閉\n"
-    "help = 顯示這個列表\n"
+    "help = 顯示這個列表\n"\
+    "停用 = 讓機器人完全停止回覆（重開機也維持）；要恢復傳「啟用」\n"
     "面板 = 傳送可點擊的圖形控制面板連結\n"
     "\n"
     "小樂點歌台（詳見操作手冊）：\n"
@@ -1854,6 +1878,24 @@ MANUAL_HTML = """<!DOCTYPE html>
     <span class="sub">機器人會回傳點歌網頁連結 + 這份操作手冊連結。</span>
   </div>
 
+  <h2>⛔ 讓機器人閉嘴（緊急用）</h2>
+  <div class="card">
+    在 LINE 傳：<code>停用</code><br />
+    <span class="sub">機器人會立刻停止回覆任何訊息，連重開機都維持停用狀態。
+    萬一它又開始亂回應、洗版，用這個直接關掉，不需要有人去操作樹莓派。<br />
+    要恢復請傳 <code>啟用</code>——這個指令在停用狀態下依然有效，不會把自己鎖在門外。<br />
+    停用期間<strong>網頁控制台完全不受影響</strong>，點歌、切歌、暫停、音量都還能用。</span>
+  </div>
+
+  <h2>群組裡的行為</h2>
+  <div class="card">
+    在群組／多人聊天室裡，訊息必須以 <code>小樂</code> 開頭才會理會，
+    例如 <code>小樂 點歌 稻香</code>。<br />
+    <span class="sub">其他訊息一律不回應，才不會在群組裡插嘴洗版。
+    <code>@全體成員</code> 也不會觸發任何動作。<br />
+    一對一聊天不受影響，可以直接下指令。</span>
+  </div>
+
   <h2>小提醒</h2>
   <div class="card sub">
     · 歌詞是從公開歌詞資料庫搜尋比對歌名找到的，不是每首歌都找得到同步歌詞，找不到會顯示「沒有找到歌詞」。<br />
@@ -2011,6 +2053,22 @@ def _extract_recommend_keyword(key: str):
 def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
     key = text.strip()
     lowered = key.lower()
+
+    # ---------- 緊急停用開關（放在所有規則之前）----------
+    # 「啟用」必須在停用狀態下依然生效，否則停用之後就把自己鎖在門外，
+    # 只能 SSH 進樹莓派刪旗標檔——那正是這個功能要避免的情況。
+    if lowered in _RESUME_WORDS:
+        was_muted = is_muted()
+        set_muted(False)
+        return '✅ 已恢復回應' if was_muted else '機器人本來就是啟用中'
+    if is_muted():
+        return None                      # 停用中：除了「啟用」一律不回
+    if lowered in _MUTE_WORDS:
+        set_muted(True)
+        return ('🔇 已停用，之後不會再回覆任何訊息（重開機也維持停用）。\n'
+                '要恢復請傳「啟用」。\n\n'
+                '網頁控制台不受影響，點歌、切歌、暫停、音量都還能用。')
+
     panel_url = f'{base_url}/panel' if base_url else ''
     karaoke_url = f'{base_url}/karaoke' if base_url else ''
     manual_url = f'{base_url}/manual' if base_url else ''

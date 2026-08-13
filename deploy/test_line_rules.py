@@ -57,3 +57,52 @@ for label, text, src, mention, expect_reply in TESTS:
     print(f"{label:<20} {text:<16} {e:<6} {g:<6} {'OK' if ok else 'FAIL'}")
 print()
 print('全部通過' if bad == 0 else f'{bad} 項失敗')
+
+# ---------------- 緊急停用開關 ----------------
+
+def flag_exists():
+    import os
+    return os.path.exists(os.path.expanduser('~/.line_bot_muted'))
+
+
+def panel_alive():
+    """停用期間網頁控制台必須還能用——那是唯一不靠 LINE 的恢復管道。"""
+    try:
+        r = urllib.request.urlopen('http://127.0.0.1:8000/api/karaoke/status', timeout=10)
+        return r.status == 200
+    except Exception:
+        return False
+
+
+print()
+print(f"{'情境':<26} {'預期':<8} {'實際':<8} 結果")
+print('-' * 56)
+bad2 = 0
+
+
+def step(label, got, want):
+    global bad2
+    ok = got == want
+    bad2 += 0 if ok else 1
+    print(f"{label:<26} {str(want):<8} {str(got):<8} {'OK' if ok else 'FAIL'}")
+
+
+import os
+try:
+    os.remove(os.path.expanduser('~/.line_bot_muted'))
+except FileNotFoundError:
+    pass
+
+step('起始・未停用', flag_exists(), False)
+send('停用', 'user')
+step('傳「停用」後建立旗標', flag_exists(), True)
+step('停用中・一般指令不回', send('排隊', 'user'), False)
+step('停用中・點歌不回', send('點歌 測試', 'user'), False)
+step('停用中・群組有喚醒詞也不回', send('小樂 排隊', 'group'), False)
+step('停用中・網頁面板仍可用', panel_alive(), True)
+step('停用中・傳「啟用」會回', send('啟用', 'user'), True)
+step('啟用後旗標已移除', flag_exists(), False)
+step('恢復後・一般指令又會回', send('排隊', 'user'), True)
+
+print()
+print('停用開關全部通過' if bad2 == 0 else f'停用開關 {bad2} 項失敗')

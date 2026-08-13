@@ -93,13 +93,16 @@ deploy/deploy.sh --check    # 只比對差異
 另外設了 tty1 自動登入（`/etc/systemd/system/getty@tty1.service.d/autologin.conf`），
 這樣 `/display` 大螢幕那條不用有人去打密碼。
 
-## 群組行為的回歸測試
+## LINE 行為的回歸測試
 
-`deploy/test_group_gate.py` 對**真正在跑的服務**送簽章正確的假 webhook，
-驗證群組閘門（有無喚醒詞、@全體成員、單字元指令、一對一不受影響共 8 種情境）。
+`deploy/test_line_rules.py` 對**真正在跑的服務**送簽章正確的假 webhook，共 17 種情境：
+
+- **群組閘門**（8 種）：有無喚醒詞、`@全體成員`、`@某人`、單字元指令、閒聊、一對一不受影響
+- **緊急停用開關**（9 種）：停用後各類指令都不回、群組喊喚醒詞也不回、
+  **停用期間網頁面板仍可用**、「啟用」在停用狀態下依然有效、旗標檔正確建立與移除
 
 ```bash
-scp deploy/test_group_gate.py $PI_HOST:/tmp/ && ssh $PI_HOST 'python3 /tmp/test_group_gate.py'
+scp deploy/test_line_rules.py $PI_HOST:/tmp/ && ssh $PI_HOST 'python3 /tmp/test_line_rules.py'
 ```
 
 用「排隊」當測試指令（唯讀，不會真的點歌）。判斷「有沒有回覆」是撈 journal 裡
