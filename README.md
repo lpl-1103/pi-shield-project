@@ -114,6 +114,7 @@ Mac 端那兩個服務見 [`mac-services/README.md`](mac-services/README.md)。
 |---|---|
 | [`docs/HANDOFF.md`](docs/HANDOFF.md) | **交接文件**。前半是架構／部署／維運／疑難排解，後半是按時間順序的第一手開發歷程 |
 | [`docs/pi3_control.md`](docs/pi3_control.md) | 操作手冊：按鍵對照、LINE 指令、Web API |
+| [`docs/smart-home-setup.md`](docs/smart-home-setup.md) | **無線開關 → 紅外線**：Aqara 中樞橋接的設定步驟（尚未對真實硬體驗證） |
 | [`deploy/README.md`](deploy/README.md) | 部署步驟、systemd、驗證方式 |
 | [`mac-services/README.md`](mac-services/README.md) | Mac 端 NLU／STT 服務與 openclaw 設定 |
 | [`docs/reports/`](docs/reports/) | 週報 |
@@ -138,7 +139,9 @@ src/stt.py             語音轉文字（打 Mac 的 mlx-whisper）
 src/radio_pool.py      電台候選池，會自己長大，避免短期內重複
 src/song_stats.py      SQLite 點歌統計
 src/weather.py         天氣查詢
-src/ir_remote.py       紅外線遙控
+src/ir_remote.py       紅外線遙控（博聯小黑豆，區網直連不走雲端）
+src/aqara_hub.py       Aqara 中樞的區網協定用戶端（只聽事件，不需金鑰）
+src/switch_bridge.py   無線開關 → 紅外線 橋接常駐程式
 src/pi3_control.py     LED / 蜂鳴器 / 繼電器 + 終端機互動介面
 
 deploy/                systemd unit、設定檔範本、部署腳本

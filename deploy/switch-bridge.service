@@ -1,0 +1,28 @@
+# 無線開關 → 紅外線 橋接常駐程式。
+#
+# 部署位置：/etc/systemd/system/switch-bridge.service
+# 啟用：sudo systemctl enable --now switch-bridge.service
+#
+# ⚠ 換一台機器接手：下面的 lpl1103 是原作者的樹莓派帳號，要整批換成你自己的
+#    sed -i '' "s/lpl1103/<你的帳號>/g" deploy/*.service
+#
+# Restart=always（不是 on-failure）：這支的工作就是「一直在聽」，
+# 任何原因結束都應該拉起來。它內部已經有重連迴圈，這是最外層的保險。
+
+[Unit]
+Description=Aqara switch to Broadlink IR bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lpl1103
+WorkingDirectory=/home/lpl1103
+ExecStart=/usr/bin/python3 /home/lpl1103/switch_bridge.py
+# 沒有這行 print() 會被緩衝，journal 看不到橋接有沒有真的收到事件
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

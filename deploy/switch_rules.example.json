@@ -1,0 +1,15 @@
+{
+  "_說明": "複製成 ~/switch_rules.json。外層的 key 是無線開關的 sid，用 aqara_discover.py 查得到。內層是「事件欄位 -> 動作 -> 要發送的紅外碼名稱」。紅外碼名稱要先用 ir_remote.py 學過（python3 -c \"import ir_remote; ir_remote.learn('風扇電源')\"）。",
+  "_注意": "欄位名稱（channel_0 / button_0 / dual_channel）會因為 D1 的批次與韌體而不同，不要照抄，以 aqara_discover.py 實際印出來的為準。",
+  "_不用重啟": "這個檔案每次事件都會重讀，改完按一下開關就知道對不對。",
+
+  "158d0001abcdef": {
+    "channel_0": {
+      "click": "風扇電源",
+      "double_click": "風扇強弱"
+    },
+    "channel_1": {
+      "click": "冷氣電源"
+    }
+  }
+}
