@@ -2133,10 +2133,14 @@ def handle_command(text: str, base_url: str = '', user_id: str = None) -> str:
         return weather.report()
 
     # ---- 風扇（紅外線）----
+    # 這支遙控器有**獨立的開機鍵與關機鍵**（2026-08-14 學碼時比對確認：
+    # fan_power 80 bytes、fan_off 316 bytes，內容不同），
+    # 所以開跟關送不同的碼，不像多數只有一顆 toggle 鍵的遙控器那樣共用。
+    # 好處是「關風扇」就是關，不必猜風扇目前是開還是關。
     if key in ('開風扇', '風扇開', '打開風扇', '開電風扇'):
         return ir_remote.send('fan_power', '風扇')
     if key in ('關風扇', '風扇關', '關掉風扇', '關電風扇'):
-        return ir_remote.send('fan_power', '風扇')
+        return ir_remote.send('fan_off', '風扇')
     if key in ('風扇風速', '調風速', '風速'):
         return ir_remote.send('fan_speed', '風速')
     if key in ('風扇擺頭', '擺頭', '搖頭'):
