@@ -114,8 +114,7 @@ Mac 端那兩個服務見 [`mac-services/README.md`](mac-services/README.md)。
 |---|---|
 | [`docs/HANDOFF.md`](docs/HANDOFF.md) | **交接文件**。前半是架構／部署／維運／疑難排解，後半是按時間順序的第一手開發歷程 |
 | [`docs/pi3_control.md`](docs/pi3_control.md) | 操作手冊：按鍵對照、LINE 指令、Web API |
-| [`docs/smart-home-architecture.md`](docs/smart-home-architecture.md) | **智慧家庭架構規劃**：兩台樹莓派分工、必買清單、推進順序 |
-| [`docs/smart-home-setup.md`](docs/smart-home-setup.md) | **無線開關 → 紅外線**：Aqara 中樞橋接的設定步驟（尚未對真實硬體驗證） |
+| [`docs/extension-smart-home.md`](docs/extension-smart-home.md) | **擴展方向：智慧家庭**——不是核心功能。架構規劃、踩坑記錄、紅外線操作步驟 |
 | [`deploy/README.md`](deploy/README.md) | 部署步驟、systemd、驗證方式 |
 | [`mac-services/README.md`](mac-services/README.md) | Mac 端 NLU／STT 服務與 openclaw 設定 |
 | [`docs/reports/`](docs/reports/) | 週報 |

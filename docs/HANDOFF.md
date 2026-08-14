@@ -392,6 +392,10 @@ Flask 的存取日誌走 stderr 所以不受影響，看起來「有些日誌有
 
 ## 14. 無線開關 → 紅外線 橋接（❌ 此路對 M3 不通）
 
+> 📁 **這一節屬於「擴展方向」，不是核心功能。**
+> 整體規劃見 [`extension-smart-home.md`](extension-smart-home.md)。
+> 點歌台的核心功能完全不依賴這裡的任何東西。
+
 > **先讀這段再往下。** 這一節寫的是「透過 Aqara 中樞轉發按鍵事件」的設計，
 > 程式（`aqara_hub.py`）也寫好了，**但實測證實使用者的 M3 中樞不支援這個協定**
 > ——見本節後段〈❌ 實測結論：這款中樞（M3）走不通〉。
@@ -424,7 +428,7 @@ Flask 的存取日誌走 stderr 所以不受影響，看起來「有些日誌有
 | `deploy/switch-bridge.service` | systemd unit |
 | `deploy/switch_rules.example.json` | 規則檔範本 |
 
-完整設定步驟見 [`smart-home-setup.md`](smart-home-setup.md)。
+完整設定步驟見 [`extension-smart-home.md`](extension-smart-home.md)。
 
 ### 三個刻意的設計決定
 
@@ -454,7 +458,7 @@ toggle，被觸發兩次等於沒按。
   別台裝置的 sid、未定義的動作、電量回報、`data` 不是 dict、規則檔壞掉——全部通過
 - 協定實作本身**沒有辦法在沒有中樞的情況下驗證**
 
-拿到電源後照 `smart-home-setup.md` 一步一步走。
+拿到電源後照 `extension-smart-home.md` 一步一步走。
 
 ### ❌ 2026-08-13 實測結論：這款中樞（M3）走不通
 
@@ -575,6 +579,8 @@ NLU 全部逾時的第一個懷疑對象是「有沒有別的東西在吃資源�
 
 
 ## 16. 評估：Aqara 開放平台 API 這條路（2026-08-14）
+
+> 📁 **這一節屬於「擴展方向」**，見 [`extension-smart-home.md`](extension-smart-home.md)。
 
 使用者找到 [`danielcy/aqara_python_sdk`](https://github.com/danielcy/aqara_python_sdk)，
 問能不能用它讓樹莓派控制 M3。**結論：這條路對 M3 不通，但條件很明確，換設備就會通。**
@@ -798,6 +804,27 @@ shell 又把自己殺掉，導致學習視窗根本沒開起來，使用者白�
 - **D1 實體按鈕那條**（Aqara App 內設定：D1 按鍵 → M3 內建紅外）
 - NLU 口語控制（§15）待 Mac 訓練跑完後重測
 - `擺頭` 是切換鍵，程式無從得知目前是開還是關（紅外單向的先天限制）
+
+
+## 18. 擴展方向與核心功能的分界
+
+智慧家庭這條線橫跨了好幾節（§14–§17），但**它們的性質不一樣**，
+接手的人需要能分辨哪些是「要維護的」、哪些是「可以不管的」：
+
+| 節 | 性質 | 接手要不要管 |
+|---|---|---|
+| §15、§17 | **核心功能**——LINE 控制電風扇已上線並實機驗證 | ✅ 要，這是交付的一部分 |
+| §14、§16 | **探索與評估**——中樞那條路已確認不通 | ❌ 不用，保留是為了避免重走死路 |
+| Home Assistant 整條線 | **擴展方向**——規劃中，尚未完成 | ❌ 不用 |
+
+完整的擴展方向規劃見 [`extension-smart-home.md`](extension-smart-home.md)。
+
+**核心系統（點歌、語音辨識、自然語言理解、LINE Bot）不依賴智慧家庭的任何部分。**
+把 `aqara_hub.py`、`switch_bridge.py`、`deploy/aqara_*` 全部刪掉，點歌台照常運作。
+唯一有相依的是 `ir_remote.py`——那支被 LINE 的風扇指令用到，屬於核心。
+
+⚠ **2026-08-14 起，Home Assistant 的後續進度不再更新到這個 repo**，改為本機記錄。
+這裡保留的是到目前為止的架構決定與踩坑記錄，之後的安裝過程不會出現在這裡。
 
 
 ---

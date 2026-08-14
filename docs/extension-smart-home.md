@@ -1,15 +1,31 @@
-# 智慧家庭架構規劃
+# 擴展方向：智慧家庭
 
-> 2026-08-14 起草。決定用**兩台樹莓派分工**：點歌台當主控，另一台跑 HA OS 專管家電。
-> 這份是規劃，不是現況——現況見 [`HANDOFF.md`](HANDOFF.md) §17。
+> **這份文件不屬於點歌台的核心功能。**
 >
-> **已定案的決定（2026-08-14）**：
-> - Zigbee USB 接收器：已購入 ✅
-> - D1 已從 M3 移除 ✅（目前未配對任何網路，等 zigbee2mqtt 建好再加入）
-> - **M3 直接放棄不用** ✅——見〈M3 的處置〉
-> - 紅外維持在點歌台上，不搬到 HA ✅
-> - **HA 那台是 Raspberry Pi 4 Model B**（照片確認：有 3.5mm 耳機孔 → 不是 Pi 5；
->   有藍色 USB 3.0 → 不是 Pi 3）。記憶體容量未確認，2GB 以上都夠用
+> 點歌台交接出去時，這裡描述的是「這個系統之後可以往哪裡長」，
+> 而不是「接手的人必須維護什麼」。核心系統（點歌、語音、LINE Bot）
+> 不依賴這裡的任何東西，全部拿掉也照常運作。
+>
+> **唯一已經上線並成為核心功能的是「LINE 控制電風扇」**
+> ——那部分寫在 [`HANDOFF.md`](HANDOFF.md) §15、§17，不在這裡。
+>
+> ⚠ 2026-08-14 起，Home Assistant 相關的後續進度**不再更新到這個 repo**，
+> 改為本機記錄。這份文件保留到目前為止的架構決定與踩坑記錄。
+
+## 這條線目前走到哪
+
+```
+✅ 已上線   LINE 指令 → 樹莓派 → 博聯小黑豆 → 紅外 → 電風扇
+                （開/關/高/中/低/擺頭，實機驗證通過）
+
+🔵 進行中   第二台樹莓派跑 HA OS，管 Zigbee 裝置與其他家電
+                （卡在電壓不足，見下）
+
+❌ 已排除   透過 Aqara M3 中樞轉發
+                （M3 不開放本機介面，實測確認）
+```
+
+---
 
 ## 目標架構
 
@@ -230,3 +246,90 @@ keyfile 內容（`psk` 是明文，這是 NetworkManager 格式的限制）：
 - Zigbee 繼電器到貨後的接線與安全注意事項（涉及市電）
 - iRobot 整合方式（HA 有官方整合，但要確認是雲端還是本地）
 - 兩台 Pi 的備份策略
+
+---
+
+# 附錄：紅外線的操作步驟與限制
+
+> 中樞相關的步驟（原步驟 0–3）已確認在 M3 上不可行，故移除。
+> 以下是實際採用的博聯小黑豆那條路，仍然有效。
+
+## 步驟 4：學紅外碼
+
+> ⚠ **你在博聯 App 裡學過的碼我們拿不到。** 那些存在博聯雲端，
+> 區網直連讀不到，所以要用樹莓派**重學一次**。
+> 學完存成 `~/ir_codes.json`，之後永久有效且完全不碰雲端。
+
+小黑豆要**插電並連上同一個 Wi-Fi**，然後：
+
+```bash
+ssh lpl1103@raspberrypi.local
+python3 -c "import ir_remote; print(ir_remote.discover())"     # 先確認找得到小黑豆
+python3 -c "import ir_remote; ir_remote.learn('風扇電源')"      # 然後拿實體遙控器對著它按
+python3 -c "import ir_remote; print(ir_remote.known())"        # 看學會哪些
+```
+
+每個要用的按鍵學一次。名稱自己取，下一步的規則檔要用同樣的名稱。
+
+## 步驟 5：寫對應規則
+
+```bash
+scp deploy/switch_rules.example.json lpl1103@raspberrypi.local:~/switch_rules.json
+```
+
+上去改成步驟 3、4 得到的實際值：
+
+```json
+{
+  "158d0001abcdef": {
+    "channel_0": { "click": "風扇電源" },
+    "channel_1": { "click": "冷氣電源", "double_click": "冷氣強風" }
+  }
+}
+```
+
+**這個檔案每次事件都會重讀，改完不用重啟服務**，按一下開關就知道對不對。
+
+## 步驟 6：啟動橋接服務
+
+```bash
+scp src/switch_bridge.py lpl1103@raspberrypi.local:~/
+scp deploy/switch-bridge.service lpl1103@raspberrypi.local:/tmp/
+ssh lpl1103@raspberrypi.local '
+  sudo cp /tmp/switch-bridge.service /etc/systemd/system/ &&
+  sudo systemctl daemon-reload &&
+  sudo systemctl enable --now switch-bridge'
+```
+
+驗證：
+
+```bash
+ssh lpl1103@raspberrypi.local 'journalctl -u switch-bridge -f'
+```
+
+然後按開關，應該看到：
+
+```
+[bridge] 158d0001abcdef channel_0=click -> 發送紅外「風扇電源」: 已發送 風扇電源
+```
+
+---
+
+## 疑難排解
+
+| 症狀 | 檢查 |
+|---|---|
+| `aqara_discover.py` 找不到中樞 | 同網段？App 裡開了區網協定？中樞型號支援嗎？ |
+| 找不到中樞但按按鈕**有事件進來** | 正常，有些韌體不回 `whois` 但照樣廣播。可以繼續 |
+| 有事件但沒發紅外 | `sid`、欄位名稱、動作名稱有沒有跟規則檔對上？journal 會印「沒有對應規則」 |
+| 按一次家電開了又關 | 去重沒生效或間隔太短。多數遙控器是 toggle，被觸發兩次就等於沒按。調 `switch_bridge.py` 的 `DEDUPE_SEC` |
+| 找不到小黑豆 | 插電了嗎？同一個 Wi-Fi 嗎？博聯裝置只支援 2.4GHz |
+| 紅外發了但家電沒反應 | 小黑豆要對得到家電的接收窗。碼學錯的話重學一次 |
+
+## 已知限制
+
+- **多播不跨網段**。中樞、樹莓派必須在同一個子網
+- **中樞型號決定可行性**。新款拿掉區網協定的話這條路走不通
+- **紅外是單向的**，發出去不知道家電有沒有收到，也讀不到家電目前狀態
+- **多數遙控器的電源是 toggle**，同一個碼開也是它關也是它，
+  所以「現在到底開著還關著」程式無從得知
