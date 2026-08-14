@@ -544,6 +544,77 @@ NLU 全部逾時的第一個懷疑對象是「有沒有別的東西在吃資源�
 學碼指令：`python3 ir_remote.py learn fan_power`，然後拿實體遙控器對著小黑豆按。
 
 
+## 16. 評估：Aqara 開放平台 API 這條路（2026-08-14）
+
+使用者找到 [`danielcy/aqara_python_sdk`](https://github.com/danielcy/aqara_python_sdk)，
+問能不能用它讓樹莓派控制 M3。**結論：這條路對 M3 不通，但條件很明確，換設備就會通。**
+
+### SDK 本身
+
+| 項目 | 事實 |
+|---|---|
+| 建立 / 最後 push | 2025-03-16 / **2025-03-17**（活了兩天） |
+| star / fork | 1 / 0 |
+| 支援裝置 | 燈、開關、場景 |
+| **不支援** | **紅外遙控、無線開關** |
+
+活躍兩天的個人專案，不適合當基礎。
+
+### 但真正的阻礙不是 SDK，是官方 API
+
+**Aqara 開放平台的 IR Device Management API 只支援
+「P3 空調控制器」與「M2 中樞」——不含 M3。**
+
+論壇上有人提功能請求要求把 M3 的紅外開放給 Open API v3，**至今沒有官方回覆**。
+所以不是 SDK 包裝不完整，是平台層就沒開放。SDK 再怎麼寫也拿不到。
+
+### M3 唯一可行的遠端控制路徑：Matter 場景
+
+M3 可以把**場景**曝露成 Matter 裝置，**上限 15 個**。所以流程會是：
+
+    Aqara App 建場景（內容＝發某個紅外指令）
+      → 曝露成 Matter 裝置
+      → 樹莓派跑 Matter 控制器（Home Assistant + Matter server）
+      → 外部觸發該場景
+
+這是**場景層級**的控制，不是直接操作紅外裝置，而且有數量上限。
+代價是樹莓派要多跑一整套服務——它目前已經跑 line-control、ngrok-tunnel、
+voice-control 三個服務，餘裕要先評估。
+
+### 目前的建議：LINE 控制家電走小黑豆，不走 M3
+
+| | 小黑豆 | M3 + Matter |
+|---|---|---|
+| 程式 | **已寫好**（`ir_remote.py` + LINE 指令） | 要裝 HA + Matter server |
+| 依賴 | 純區網 | Matter 是本地，但多一層服務 |
+| 數量限制 | 無 | 15 個場景 |
+| 缺什麼 | 插電 + 學碼 | 一整套服務 |
+
+**兩者可以並存**，紅外是單向的、誰發都一樣：
+
+- 實體按鈕 → D1 → M3 內建紅外 → 家電（Aqara App 設定，零程式）
+- LINE 指令 → 樹莓派 → 小黑豆 → 家電（程式已就緒）
+
+### ⚠ 什麼時候該回頭重啟這條路
+
+使用者要求「別全丟，以後換設備再重啟」。**重啟的具體判準**：
+
+1. **入手 M2 中樞或 P3 空調控制器** → 開放平台 API 的紅外立刻可用，
+   這是目前唯一被官方支援的紅外裝置清單
+2. **Aqara 開放 M3 的紅外給 Open API v3** → 追蹤上面那則功能請求
+3. **樹莓派有餘裕跑 Home Assistant** → Matter 場景那條就可行
+
+三個條件任一成立，這一節就值得重看。**注意 API 走的是雲端**
+（需要 AppID/AppKey/KeyID + Aqara 帳號 + 簡訊驗證），
+跟這個專案其他部分「全部本機、不碰雲端」的原則不一致，採用前要想清楚。
+
+### 參考
+
+- SDK：<https://github.com/danielcy/aqara_python_sdk>
+- 紅外 API 文件：<https://opendoc.aqara.com/en/docs/developmanual/apiDocument/IRDeviceManagement.html>
+- M3 紅外開放請求：<https://forum.aqara.com/t/feature-request-expose-hub-m3-ir-hardware-via-open-api-v3-for-native-home-assistant-ir-proxy-support/303033>
+
+
 ---
 
 # 第二部分：開發歷程（依時間順序）
