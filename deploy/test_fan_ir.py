@@ -31,7 +31,7 @@ def send(text):
 
 print('對真正的服務送 LINE webhook，並確認機器人有回覆')
 print('-' * 58)
-for cmd in ['開風扇', '關風扇', '風速']:
+for cmd in ['開風扇', '關風扇', '大風', '中風', '小風', '擺頭']:
     log = send(cmd)
     replied = '[line_reply]' in log
     print(f'  {cmd:6} -> {"有回覆" if replied else "沒有回覆 ⚠"}')
