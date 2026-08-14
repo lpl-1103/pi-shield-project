@@ -64,14 +64,30 @@ def discover(timeout=DISCOVER_TIMEOUT):
     return out
 
 
-def _device():
+_cached_device = None
+
+
+def _device(force_rediscover: bool = False):
     """拿一台可用的裝置。找不到回 None。
 
-    每次都重新探索是刻意的：小黑豆的 IP 由 DHCP 配發會變，
-    快取住 IP 反而會在換 IP 之後靜默失效。探索只要幾秒。
+    ## 為什麼要快取
+
+    原本每次發送都重新廣播探索一次，那是 6 秒的 UDP timeout——
+    使用者在 LINE 傳「關風扇」要等 6 秒才有反應，連續送多個指令更是難用。
+    快取住 device 物件之後，第二次以後的發送幾乎是即時的。
+
+    ## 但 IP 會變，所以不能只快取
+
+    小黑豆的 IP 由 DHCP 配發。快取住之後如果 IP 變了，送出去會失敗——
+    所以 `send()` 在發送失敗時會帶 `force_rediscover=True` 再試一次，
+    等於「先用快的，壞了才走慢的」。這樣兼顧速度與正確性。
     """
+    global _cached_device
+    if _cached_device is not None and not force_rediscover:
+        return _cached_device
     devs = discover()
-    return devs[0][3] if devs else None
+    _cached_device = devs[0][3] if devs else None
+    return _cached_device
 
 
 def learn(name, timeout=LEARN_TIMEOUT):
@@ -114,14 +130,21 @@ def send(name, label=None):
         return (f'還沒有學過「{label}」的紅外線碼。\n'
                 f'請在樹莓派上執行：python3 ir_remote.py learn {name}\n'
                 f'然後把遙控器對準小黑豆按一下對應的按鍵。')
-    dev = _device()
-    if dev is None:
-        return '區網裡找不到博聯裝置（小黑豆）。確認它有通電、且跟樹莓派同網段。'
-    try:
-        dev.send_data(bytes.fromhex(codes[name]))
-    except Exception as e:
-        return f'發送失敗：{e!r}'
-    return f'📡 已送出「{label}」訊號'
+    payload = bytes.fromhex(codes[name])
+    # 先用快取的裝置；失敗才重新探索再試一次（IP 可能被 DHCP 換掉了）
+    for attempt in (False, True):
+        dev = _device(force_rediscover=attempt)
+        if dev is None:
+            if attempt:
+                return '區網裡找不到博聯裝置（小黑豆）。確認它有通電、且跟樹莓派同網段。'
+            continue
+        try:
+            dev.send_data(payload)
+            return f'📡 已送出「{label}」訊號'
+        except Exception as e:
+            if attempt:
+                return f'發送失敗：{e!r}'
+    return '區網裡找不到博聯裝置（小黑豆）。確認它有通電、且跟樹莓派同網段。'
 
 
 def known():
